@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>登录</title>
+  </head>
+
+  <body>
+    <div id="user"></div>
+    <div id="logout-section">
+      <button id="logout">Logout</button>
+    </div>
+
+    <script src="https://unpkg.com/@authorizerdev/authorizer-js/lib/authorizer.min.js"></script>
+
+    <script type="text/javascript">
+      const authorizerRef = new authorizerdev.Authorizer({
+        authorizerURL: "http://localhost:8080",
+        redirectURL: "http://localhost:5500/login.html",
+        clientID: "a61124a6-7978-40a9-b9b7-4b3a40e6ef8e", // obtain your client id from authorizer dashboard
+      });
+
+      // use the button selector as per your application
+      const logoutBtn = document.getElementById("logout");
+      logoutBtn.addEventListener("click", async function () {
+        await authorizerRef.logout();
+        window.location.href = "/";
+      });
+
+      async function onLoad() {
+        const res = await authorizerRef.authorize({
+          response_type: "code",
+          use_refresh_token: false,
+        });
+        if (res) {
+          const user = await authorizerRef.getProfile({
+            Authorization: `Bearer ${res.access_token}`,
+          });
+          const userSection = document.getElementById("user");
+          const logoutSection = document.getElementById("logout-section");
+          logoutSection.classList.toggle("hide");
+          userSection.innerHTML = `Welcome, ${user.data.email}`;
+
+          const userInfo = encodeURIComponent(JSON.stringify(user));
+          window.location.href = `vscode://lvjiawen.dev-expert/auth/login?userInfo=${userInfo}`;
+        }
+      }
+      onLoad();
+    </script>
+  </body>
+</html>
