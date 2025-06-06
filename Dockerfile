@@ -1,3 +1,4 @@
+# 方案1：修改 Dockerfile 使用国内代理
 FROM golang:1.21.3-alpine3.18 as go-builder
 WORKDIR /authorizer
 COPY server server
@@ -5,6 +6,11 @@ COPY Makefile .
 
 ARG VERSION="latest"
 ENV VERSION="$VERSION"
+
+# 设置 Go 代理为国内镜像
+ENV GOPROXY=https://goproxy.cn,direct
+ENV GOSUMDB=sum.golang.google.cn
+ENV GO111MODULE=on
 
 RUN echo "$VERSION"
 RUN apk add build-base &&\
@@ -16,6 +22,9 @@ WORKDIR /authorizer
 COPY app app
 COPY dashboard dashboard
 COPY Makefile .
+
+# 设置 npm 国内镜像
+RUN npm config set registry https://registry.npmmirror.com
 RUN apk add build-base &&\
     make build-app && \
     make build-dashboard

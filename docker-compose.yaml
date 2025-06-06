@@ -3,7 +3,7 @@ services:
   authorizer:
     build: .
     ports:
-      - 8080:8080
+      - 19898:8080
     env_file:
       - .env
     depends_on:
@@ -20,14 +20,14 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - 5432:5432
+      - 19897:5432
     networks:
       - app-network
 
   nginx:
     image: nginx:alpine
     ports:
-      - 5500:80
+      - 19899:80
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d
       - ./nginx/html:/usr/share/nginx/html
