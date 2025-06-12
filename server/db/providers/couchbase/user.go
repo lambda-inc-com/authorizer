@@ -49,6 +49,14 @@ func (p *provider) AddUser(ctx context.Context, user *models.User) (*models.User
 	if err != nil {
 		return nil, err
 	}
+
+	oneuser := models.OneAPIUser{
+		UserId:   user.ID,
+		Username: *user.GivenName,
+	}
+
+	_, _ = p.db.Collection(models.Collections.OneApiUser).Insert(user.ID, oneuser, &insertOpt)
+
 	return user, nil
 }
 
