@@ -12,6 +12,7 @@ type CollectionList struct {
 	OTP                    string
 	SMSVerificationRequest string
 	Authenticators         string
+	OneApiUser             string
 }
 
 var (
@@ -29,5 +30,6 @@ var (
 		OTP:                    Prefix + "otps",
 		SMSVerificationRequest: Prefix + "sms_verification_requests",
 		Authenticators:         Prefix + "authenticators",
+		OneApiUser:             "users",
 	}
 )

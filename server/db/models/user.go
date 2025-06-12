@@ -36,6 +36,32 @@ type User struct {
 	AppData                  *string `json:"app_data" bson:"app_data" cql:"app_data" dynamo:"app_data"`
 }
 
+type OneAPIUser struct {
+	ID           int64   `gorm:"primaryKey;autoIncrement" json:"id"` // bigserial 主键
+	UserId       string  `json:"user_id" gorm:"type:varchar(64);default:'default'"`
+	Username     string  `gorm:"type:text;uniqueIndex" json:"username"`           // 唯一用户名
+	Password     string  `gorm:"type:text;not null" json:"password"`              // 非空密码
+	DisplayName  *string `gorm:"type:text" json:"display_name"`                   // 可空显示名
+	Role         int64   `gorm:"type:bigint;default:1" json:"role"`               // 角色，默认1
+	Status       int64   `gorm:"type:bigint;default:1" json:"status"`             // 状态，默认1
+	Email        *string `gorm:"type:text;index" json:"email"`                    // 可空邮箱（带索引）
+	GithubID     *string `gorm:"type:text;index" json:"github_id"`                // GitHub ID（带索引）
+	WechatID     *string `gorm:"type:text;index" json:"wechat_id"`                // 微信ID（带索引）
+	LarkID       *string `gorm:"type:text;index" json:"lark_id"`                  // 飞书ID（带索引）
+	OIDCID       *string `gorm:"type:text;index" json:"oidc_id"`                  // OIDC ID（带索引）
+	AccessToken  *string `gorm:"type:char(32);uniqueIndex" json:"access_token"`   // 唯一访问令牌
+	Quota        int64   `gorm:"type:bigint;default:0" json:"quota"`              // 配额，默认0
+	UsedQuota    int64   `gorm:"type:bigint;default:0" json:"used_quota"`         // 已用配额，默认0
+	RequestCount int64   `gorm:"type:bigint;default:0" json:"request_count"`      // 请求计数，默认0
+	Group        string  `gorm:"type:varchar(32);default:'default'" json:"group"` // 分组，默认'default'
+	AffCode      *string `gorm:"type:varchar(32);uniqueIndex" json:"aff_code"`    // 邀请码（唯一）
+	InviterID    *int64  `gorm:"type:bigint;index" json:"inviter_id"`             // 邀请人ID（带索引）
+
+	// 时间戳（根据需求可选添加）
+	CreatedAt int64 `gorm:"autoCreateTime" json:"created_at"` // 创建时间
+	UpdatedAt int64 `gorm:"autoUpdateTime" json:"updated_at"` // 更新时间
+}
+
 func (user *User) AsAPIUser() *model.User {
 	isEmailVerified := user.EmailVerifiedAt != nil
 	isPhoneVerified := user.PhoneNumberVerifiedAt != nil
