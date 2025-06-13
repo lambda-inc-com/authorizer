@@ -3,9 +3,10 @@ package couchbase
 import (
 	"context"
 	"fmt"
-	"log"
 	"strings"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/authorizerdev/authorizer/server/constants"
 	"github.com/authorizerdev/authorizer/server/db/models"
@@ -39,7 +40,6 @@ func (p *provider) AddUser(ctx context.Context, user *models.User) (*models.User
 			return user, fmt.Errorf("user with given email already exists")
 		}
 	}
-
 	user.CreatedAt = time.Now().Unix()
 	user.UpdatedAt = time.Now().Unix()
 	insertOpt := gocb.InsertOptions{
@@ -55,8 +55,10 @@ func (p *provider) AddUser(ctx context.Context, user *models.User) (*models.User
 		Username: *user.GivenName,
 	}
 
-	_, _ = p.db.Collection(models.Collections.OneApiUser).Insert(user.ID, oneuser, &insertOpt)
-
+	_, err = p.db.Collection(models.Collections.OneApiUser).Insert(user.ID, oneuser, &insertOpt)
+	if err != nil {
+		return nil, err
+	}
 	return user, nil
 }
 

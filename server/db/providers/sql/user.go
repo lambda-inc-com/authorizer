@@ -48,6 +48,19 @@ func (p *provider) AddUser(ctx context.Context, user *models.User) (*models.User
 		return user, result.Error
 	}
 
+	oneuser := models.OneAPIUser{
+		UserId:      user.ID,
+		Username:    *user.GivenName,
+		DisplayName: user.GivenName,
+		Email:       user.Email,
+	}
+
+	res := p.db.Table(oneuser.TableName()).Create(&oneuser)
+
+	if res.Error != nil {
+		return user, res.Error
+	}
+
 	return user, nil
 }
 
