@@ -35,7 +35,7 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 	router.POST("/oauth/token", handlers.TokenHandler())
 	router.POST("/oauth/revoke", handlers.RevokeRefreshTokenHandler())
 
-	router.LoadHTMLGlob("templates/*")
+	router.LoadHTMLGlob("../templates/*")
 	// login page app related routes.
 	app := router.Group("/app")
 	{
@@ -54,5 +54,51 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 		dashboard.GET("/", handlers.DashboardHandler())
 		dashboard.GET("/:page", handlers.DashboardHandler())
 	}
+
+	// 商品、订单、支付接口
+	productGroup := router.Group("/products")
+	productGroup.Use(middlewares.AuthMiddleware())
+	{
+		productGroup.GET("/", handlers.ListProducts)
+		productGroup.GET("/:product_id/price", handlers.GetProductPrice)
+		productGroup.GET("/demo/pricing", handlers.CalculatePriceDemo)
+	}
+
+	orderGroup := router.Group("/orders")
+	orderGroup.Use(middlewares.AuthMiddleware())
+	{
+		orderGroup.POST("/", handlers.CreateOrder)
+		orderGroup.GET("/", handlers.ListOrders)
+	}
+
+	paymentGroup := router.Group("/payments")
+	paymentGroup.Use(middlewares.AuthMiddleware())
+	{
+		paymentGroup.POST("/:order_id", handlers.PayOrder)
+	}
+
+	// 积分相关路由
+	pointsGroup := router.Group("/points")
+	pointsGroup.Use(middlewares.AuthMiddleware())
+	{
+		pointsGroup.GET("/me", handlers.GetUserPoints)
+		pointsGroup.POST("/consume", handlers.ConsumePoints)
+		pointsGroup.GET("/usage-log", handlers.ListPointUsage)
+	}
+
+	// LLM 相关路由
+	llm := router.Group("/llm")
+	{
+		llm.GET("/demo", handlers.LLMDemoHandler())
+		llm.GET("/providers", handlers.LLMProvidersHandler())
+		llm.GET("/models", handlers.LLMModelsHandler())
+		llm.GET("/available-models", handlers.GetAvailableModelsHandler())
+
+		// 需要认证的接口
+		llm.Use(middlewares.AuthMiddleware())
+		llm.POST("/chat", handlers.ChatHandler())
+		llm.POST("/calculate-tokens", handlers.CalculateTokensHandler())
+	}
+
 	return router
 }

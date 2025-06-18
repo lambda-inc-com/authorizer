@@ -22,6 +22,7 @@ require (
 	github.com/pquerna/otp v1.4.0
 	github.com/redis/go-redis/v9 v9.2.1
 	github.com/robertkrimen/otto v0.2.1
+	github.com/shopspring/decimal v1.4.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.9.0
 	github.com/tuotoo/qrcode v0.0.0-20220425170535-52ccc2bebf5d
