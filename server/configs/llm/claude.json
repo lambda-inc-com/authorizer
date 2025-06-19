@@ -1,0 +1,14 @@
+{
+  "provider": "Anthropic",
+  "model_type": "claude",
+  "model_name": "claude-3-sonnet-20240229",
+  "api_key": "${CLAUDE_API_KEY}",
+  "base_url": "https://api.anthropic.com/v1",
+  "max_tokens": 4096,
+  "token_ratio": {
+    "input": 1,
+    "output": 1
+  },
+  "is_enabled": false,
+  "extra": {}
+}

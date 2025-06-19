@@ -159,4 +159,15 @@ type Provider interface {
 	GetTotalPointsConsumedByUser(ctx context.Context, userID string) (int, error)
 	GetPointUsageStatistics(ctx context.Context) (map[string]interface{}, error)
 	RecordPointUsage(ctx context.Context, userID, content string, amountConsumed int, modelType, modelName string) error
+
+	// UserLLMConfig operations
+	AddUserLLMConfig(ctx context.Context, config *models.UserLLMConfig) (*models.UserLLMConfig, error)
+	UpdateUserLLMConfig(ctx context.Context, config *models.UserLLMConfig) (*models.UserLLMConfig, error)
+	DeleteUserLLMConfig(ctx context.Context, configID string) error
+	GetUserLLMConfigByID(ctx context.Context, id string) (*models.UserLLMConfig, error)
+	GetUserLLMConfigsByUserID(ctx context.Context, userID string) ([]*models.UserLLMConfig, error)
+	GetUserLLMConfigByUserIDAndProvider(ctx context.Context, userID, provider string) (*models.UserLLMConfig, error)
+	GetDefaultUserLLMConfig(ctx context.Context, userID string) (*models.UserLLMConfig, error)
+	SetDefaultUserLLMConfig(ctx context.Context, userID, configID string) error
+	GetUserLLMConfigsByModelType(ctx context.Context, userID, modelType string) ([]*models.UserLLMConfig, error)
 }

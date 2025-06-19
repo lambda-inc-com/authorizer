@@ -18,6 +18,7 @@ const (
 	ModelTypeOpenAI   ModelType = "openai"
 	ModelTypeClaude   ModelType = "claude"
 	ModelTypeDeepSeek ModelType = "deepseek"
+	ModelTypeXAI      ModelType = "xai"
 )
 
 // ChatMessage 聊天消息结构

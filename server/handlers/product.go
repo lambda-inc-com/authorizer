@@ -22,30 +22,43 @@ func InitProducts() error {
 		return nil // 已经有数据，不需要重复初始化
 	}
 
-	// 初始化A、B商品
+	// 初始化A、B、C商品
 	initialProducts := []*models.Product{
 		{
 			ID:                "a",
-			Name:              "A商品",
-			Points:            4000,
-			PricingMonthly:    decimal.NewFromFloat(39.9),  // 按月支付
-			PricingYearly:     decimal.NewFromFloat(399.0), // 按年支付(相当于月费打8.3折)
-			PricingContinuous: decimal.NewFromFloat(35.9),  // 连续续订月费(9折优惠)
+			Name:              "A商品 - 自配API密钥版",
+			Points:            0,                           // A商品无积分，需要用户自己配置API密钥
+			PricingMonthly:    decimal.NewFromFloat(19.9),  // 按月支付
+			PricingYearly:     decimal.NewFromFloat(199.0), // 按年支付(相当于月费打8.3折)
+			PricingContinuous: decimal.NewFromFloat(17.9),  // 连续续订月费(9折优惠)
 			Type:              "subscription",
-			Description:       "A商品支持多种支付方式",
+			Description:       "购买后需要配置自己的API密钥才能使用LLM服务",
 			Image:             "",
 			CreatedAt:         time.Now(),
 			UpdatedAt:         time.Now(),
 		},
 		{
 			ID:                "b",
-			Name:              "B商品",
+			Name:              "B商品 - 系统服务版",
 			Points:            6000,
 			PricingMonthly:    decimal.NewFromFloat(59.9),  // 按月支付
 			PricingYearly:     decimal.NewFromFloat(599.0), // 按年支付(相当于月费打8.3折)
 			PricingContinuous: decimal.NewFromFloat(53.9),  // 连续续订月费(9折优惠)
 			Type:              "subscription",
-			Description:       "B商品支持多种支付方式",
+			Description:       "购买后可直接使用系统配置的LLM服务，无需自己配置API密钥",
+			Image:             "",
+			CreatedAt:         time.Now(),
+			UpdatedAt:         time.Now(),
+		},
+		{
+			ID:                "c",
+			Name:              "C商品 - 高级服务版",
+			Points:            10000,
+			PricingMonthly:    decimal.NewFromFloat(99.9),  // 按月支付
+			PricingYearly:     decimal.NewFromFloat(999.0), // 按年支付(相当于月费打8.3折)
+			PricingContinuous: decimal.NewFromFloat(89.9),  // 连续续订月费(9折优惠)
+			Type:              "subscription",
+			Description:       "购买后可直接使用系统配置的高级LLM服务，包含更多积分",
 			Image:             "",
 			CreatedAt:         time.Now(),
 			UpdatedAt:         time.Now(),

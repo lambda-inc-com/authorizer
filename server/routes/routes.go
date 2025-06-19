@@ -39,8 +39,8 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 	// login page app related routes.
 	app := router.Group("/app")
 	{
-		app.Static("/favicon_io", "app/favicon_io")
-		app.Static("/build", "app/build")
+		app.Static("/favicon_io", "../app/favicon_io")
+		app.Static("/build", "../app/build")
 		app.GET("/", handlers.AppHandler())
 		app.GET("/:page", handlers.AppHandler())
 	}
@@ -48,9 +48,9 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 	// dashboard related routes
 	dashboard := router.Group("/dashboard")
 	{
-		dashboard.Static("/favicon_io", "dashboard/favicon_io")
-		dashboard.Static("/build", "dashboard/build")
-		dashboard.Static("/public", "dashboard/public")
+		dashboard.Static("/favicon_io", "../dashboard/favicon_io")
+		dashboard.Static("/build", "../dashboard/build")
+		dashboard.Static("/public", "../dashboard/public")
 		dashboard.GET("/", handlers.DashboardHandler())
 		dashboard.GET("/:page", handlers.DashboardHandler())
 	}
@@ -77,6 +77,13 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 		paymentGroup.POST("/:order_id", handlers.PayOrder)
 	}
 
+	// 订阅状态相关路由
+	subscriptionGroup := router.Group("/subscription")
+	subscriptionGroup.Use(middlewares.AuthMiddleware())
+	{
+		subscriptionGroup.GET("/status", handlers.GetUserSubscriptionHandler())
+	}
+
 	// 积分相关路由
 	pointsGroup := router.Group("/points")
 	pointsGroup.Use(middlewares.AuthMiddleware())
@@ -84,6 +91,8 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 		pointsGroup.GET("/me", handlers.GetUserPoints)
 		pointsGroup.POST("/consume", handlers.ConsumePoints)
 		pointsGroup.GET("/usage-log", handlers.ListPointUsage)
+		pointsGroup.GET("/status", handlers.GetPointsStatusHandler())
+		pointsGroup.GET("/recharge-recommendation", handlers.RechargeRecommendationHandler())
 	}
 
 	// LLM 相关路由
@@ -98,6 +107,13 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 		llm.Use(middlewares.AuthMiddleware())
 		llm.POST("/chat", handlers.ChatHandler())
 		llm.POST("/calculate-tokens", handlers.CalculateTokensHandler())
+
+		// 用户LLM配置接口
+		llm.POST("/user-configs", handlers.AddUserLLMConfigHandler())
+		llm.GET("/user-configs", handlers.GetUserLLMConfigsHandler())
+		llm.PUT("/user-configs/:config_id", handlers.UpdateUserLLMConfigHandler())
+		llm.DELETE("/user-configs/:config_id", handlers.DeleteUserLLMConfigHandler())
+		llm.POST("/user-configs/:config_id/set-default", handlers.SetDefaultUserLLMConfigHandler())
 	}
 
 	return router

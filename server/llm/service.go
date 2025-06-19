@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 
 	"github.com/authorizerdev/authorizer/server/db"
+	"github.com/authorizerdev/authorizer/server/db/models"
 	"github.com/authorizerdev/authorizer/server/llm/providers"
+	"github.com/authorizerdev/authorizer/server/services"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -47,6 +49,7 @@ func NewService() *Service {
 	service.providers[providers.ModelTypeOpenAI] = providers.NewOpenAIProvider()
 	service.providers[providers.ModelTypeClaude] = providers.NewClaudeProvider()
 	service.providers[providers.ModelTypeDeepSeek] = providers.NewDeepSeekProvider()
+	service.providers[providers.ModelTypeXAI] = providers.NewXAIProvider()
 
 	return service
 }
@@ -83,17 +86,90 @@ func (s *Service) GetAvailableModels(ctx context.Context) (map[string][]provider
 
 // Chat 统一聊天接口
 func (s *Service) Chat(ctx context.Context, userID string, request *providers.ChatRequest) (*providers.ChatResponse, error) {
-	// 根据模型名称找到对应的配置
-	var config *providers.ModelConfig
-	for _, cfg := range s.configs {
-		if cfg.ModelName == request.Model && cfg.IsEnabled {
-			config = cfg
-			break
-		}
+	// 创建订阅服务
+	subscriptionService := services.NewSubscriptionService()
+
+	// 检查用户订阅状态
+	subscription, err := subscriptionService.CheckUserSubscription(ctx, userID)
+	if err != nil {
+		log.Errorf("Failed to check user subscription: %v", err)
 	}
 
-	if config == nil {
-		return nil, fmt.Errorf("model %s not found or not enabled", request.Model)
+	var config *providers.ModelConfig
+	var useUserConfig bool = false
+	var reason string = ""
+
+	// 决策逻辑：
+	// 1. 如果用户有有效订阅且有积分 -> 使用系统API key
+	// 2. 如果用户有有效订阅且无积分 -> 必须使用用户API key
+	// 3. 如果用户无有效订阅 -> 则无法使用程序
+
+	if !subscription.HasValidSubscription {
+		// 无有效订阅，直接拒绝
+		return nil, fmt.Errorf("无有效订阅，请先购买订阅服务后再使用")
+	}
+
+	// 有有效订阅，检查积分情况
+	userPoints, err := db.Provider.GetUserPointsByUserID(ctx, userID)
+	if err != nil {
+		log.Errorf("Failed to get user points: %v", err)
+		userPoints = &models.UserPoints{Points: 0}
+	}
+
+	if userPoints.Points > 0 {
+		// 有订阅且有积分，使用系统API key并扣积分
+		useUserConfig = false
+		reason = fmt.Sprintf("购买了%s且有积分，使用系统服务", subscription.ProductName)
+	} else {
+		// 有订阅但无积分，必须使用用户API key
+		useUserConfig = true
+		reason = fmt.Sprintf("购买了%s但积分不足，需要配置自己的API密钥", subscription.ProductName)
+	}
+
+	if useUserConfig {
+		// 查找用户是否有对应模型的自定义配置
+		userConfigs, err := db.Provider.GetUserLLMConfigsByUserID(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("%s，但获取用户LLM配置失败: %w", reason, err)
+		}
+
+		// 根据模型名称找到匹配的用户配置
+		var userConfig *models.UserLLMConfig
+		for _, uc := range userConfigs {
+			if uc.ModelName == request.Model && uc.IsEnabled {
+				userConfig = uc
+				break
+			}
+		}
+
+		if userConfig == nil {
+			return nil, fmt.Errorf("%s，请配置%s模型的API密钥", reason, request.Model)
+		}
+
+		// 转换用户配置为ModelConfig
+		config = &providers.ModelConfig{
+			Provider:  userConfig.Provider,
+			ModelType: providers.ModelType(userConfig.ModelType),
+			ModelName: userConfig.ModelName,
+			APIKey:    userConfig.APIKey,
+			BaseURL:   userConfig.BaseURL,
+			MaxTokens: userConfig.MaxTokens,
+			IsEnabled: userConfig.IsEnabled,
+		}
+		log.Infof("User %s using own API key for model %s: %s", userID, request.Model, reason)
+	} else {
+		// 使用系统配置
+		for _, cfg := range s.configs {
+			if cfg.ModelName == request.Model && cfg.IsEnabled {
+				config = cfg
+				break
+			}
+		}
+
+		if config == nil {
+			return nil, fmt.Errorf("model %s not found or not enabled", request.Model)
+		}
+		log.Infof("User %s using system API key for model %s: %s", userID, request.Model, reason)
 	}
 
 	// 获取对应的提供商
@@ -102,25 +178,29 @@ func (s *Service) Chat(ctx context.Context, userID string, request *providers.Ch
 		return nil, fmt.Errorf("get provider failed: %w", err)
 	}
 
-	// 预扣积分检查
-	tokenReq := &providers.TokenCalculateRequest{
-		Model:    request.Model,
-		Messages: request.Messages,
-	}
+	// 如果使用系统配置且需要扣积分，进行积分检查
+	needConsumePoints := !useUserConfig && subscription.HasValidSubscription
+	if needConsumePoints {
 
-	tokenResp, err := provider.CalculateTokens(ctx, config, tokenReq)
-	if err != nil {
-		return nil, fmt.Errorf("calculate tokens failed: %w", err)
-	}
+		// 如果积分 <= 1000，需要预计算检查
+		if userPoints.Points <= 1000 {
+			tokenReq := &providers.TokenCalculateRequest{
+				Model:    request.Model,
+				Messages: request.Messages,
+			}
 
-	// 检查用户积分是否足够
-	userPoints, err := db.Provider.GetUserPointsByUserID(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("get user points failed: %w", err)
-	}
+			tokenResp, err := provider.CalculateTokens(ctx, config, tokenReq)
+			if err != nil {
+				return nil, fmt.Errorf("calculate tokens failed: %w", err)
+			}
 
-	if userPoints.Points < tokenResp.EstimatedPoints {
-		return nil, fmt.Errorf("insufficient points: need %d, have %d", tokenResp.EstimatedPoints, userPoints.Points)
+			if userPoints.Points < tokenResp.EstimatedPoints {
+				return nil, fmt.Errorf("积分不足：预计需要 %d 积分，当前剩余 %d 积分。请充值后再试", tokenResp.EstimatedPoints, userPoints.Points)
+			}
+			log.Infof("User %s has %d points, estimated cost %d points, proceeding with request", userID, userPoints.Points, tokenResp.EstimatedPoints)
+		} else {
+			log.Infof("User %s has %d points (>1000), skipping pre-calculation", userID, userPoints.Points)
+		}
 	}
 
 	// 调用聊天接口
@@ -129,17 +209,51 @@ func (s *Service) Chat(ctx context.Context, userID string, request *providers.Ch
 		return nil, fmt.Errorf("chat request failed: %w", err)
 	}
 
-	// 根据实际消耗的token扣除积分
-	actualPoints := response.Usage.TotalTokens
-	if actualPoints == 0 {
-		actualPoints = tokenResp.EstimatedPoints // 如果没有返回用量，使用预估值
-	}
+	// 如果需要扣积分
+	if needConsumePoints {
+		actualPoints := response.Usage.TotalTokens
+		if actualPoints == 0 {
+			// 如果没有返回用量，重新计算
+			tokenReq := &providers.TokenCalculateRequest{
+				Model:    request.Model,
+				Messages: request.Messages,
+			}
+			tokenResp, _ := provider.CalculateTokens(ctx, config, tokenReq)
+			if tokenResp != nil {
+				actualPoints = tokenResp.EstimatedPoints
+			} else {
+				actualPoints = 10 // 默认消耗10积分，避免0消耗
+			}
+		}
 
-	// 消耗积分
-	_, err = db.Provider.ConsumeUserPoints(ctx, userID, actualPoints)
-	if err != nil {
-		log.Errorf("Failed to consume points for user %s: %v", userID, err)
-		// 注意：这里不返回错误，因为聊天已经成功，只是积分扣除失败
+		// 获取最新的用户积分（可能在请求期间有变化）
+		latestUserPoints, err := db.Provider.GetUserPointsByUserID(ctx, userID)
+		if err != nil {
+			log.Errorf("Failed to get user points for consumption for user %s: %v", userID, err)
+			return response, nil // 聊天成功，但积分获取失败，返回结果
+		}
+
+		// 检查积分是否足够扣除
+		if latestUserPoints.Points < actualPoints {
+			log.Errorf("User %s insufficient points for actual consumption: need %d, have %d", userID, actualPoints, latestUserPoints.Points)
+			// 积分不足，扣除所有剩余积分
+			if latestUserPoints.Points > 0 {
+				_, err = db.Provider.ConsumeUserPoints(ctx, userID, latestUserPoints.Points)
+				if err != nil {
+					log.Errorf("Failed to consume remaining points for user %s: %v", userID, err)
+				} else {
+					log.Infof("Consumed all remaining %d points for user %s", latestUserPoints.Points, userID)
+				}
+			}
+		} else {
+			// 消耗实际积分
+			_, err = db.Provider.ConsumeUserPoints(ctx, userID, actualPoints)
+			if err != nil {
+				log.Errorf("Failed to consume %d points for user %s: %v", actualPoints, userID, err)
+			} else {
+				log.Infof("Successfully consumed %d points for user %s", actualPoints, userID)
+			}
+		}
 	}
 
 	return response, nil
@@ -224,6 +338,17 @@ func (s *Service) createDefaultConfigs(configDir string) error {
 			ModelName:  "deepseek-chat",
 			APIKey:     "${DEEPSEEK_API_KEY}",
 			BaseURL:    "https://api.deepseek.com/v1",
+			MaxTokens:  4096,
+			TokenRatio: map[string]int{"input": 1, "output": 1},
+			IsEnabled:  false,
+			Extra:      map[string]string{},
+		},
+		"xai.json": {
+			Provider:   "xAI",
+			ModelType:  providers.ModelTypeXAI,
+			ModelName:  "grok-beta",
+			APIKey:     "${XAI_API_KEY}",
+			BaseURL:    "https://api.x.ai/v1",
 			MaxTokens:  4096,
 			TokenRatio: map[string]int{"input": 1, "output": 1},
 			IsEnabled:  false,
