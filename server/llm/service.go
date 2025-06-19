@@ -236,22 +236,24 @@ func (s *Service) Chat(ctx context.Context, userID string, request *providers.Ch
 		// 检查积分是否足够扣除
 		if latestUserPoints.Points < actualPoints {
 			log.Errorf("User %s insufficient points for actual consumption: need %d, have %d", userID, actualPoints, latestUserPoints.Points)
-			// 积分不足，扣除所有剩余积分
+			// 积分不足，扣除所有剩余积分并记录使用日志
 			if latestUserPoints.Points > 0 {
-				_, err = db.Provider.ConsumeUserPoints(ctx, userID, latestUserPoints.Points)
+				content := fmt.Sprintf("LLM聊天对话 - %s (积分不足，扣除剩余积分)", request.Model)
+				err = db.Provider.RecordPointUsage(ctx, userID, content, latestUserPoints.Points, "llm", request.Model)
 				if err != nil {
-					log.Errorf("Failed to consume remaining points for user %s: %v", userID, err)
+					log.Errorf("Failed to record remaining points usage for user %s: %v", userID, err)
 				} else {
-					log.Infof("Consumed all remaining %d points for user %s", latestUserPoints.Points, userID)
+					log.Infof("Recorded usage and consumed all remaining %d points for user %s", latestUserPoints.Points, userID)
 				}
 			}
 		} else {
-			// 消耗实际积分
-			_, err = db.Provider.ConsumeUserPoints(ctx, userID, actualPoints)
+			// 消耗实际积分并记录使用日志
+			content := fmt.Sprintf("LLM聊天对话 - %s", request.Model)
+			err = db.Provider.RecordPointUsage(ctx, userID, content, actualPoints, "llm", request.Model)
 			if err != nil {
-				log.Errorf("Failed to consume %d points for user %s: %v", actualPoints, userID, err)
+				log.Errorf("Failed to record %d points usage for user %s: %v", actualPoints, userID, err)
 			} else {
-				log.Infof("Successfully consumed %d points for user %s", actualPoints, userID)
+				log.Infof("Successfully recorded usage and consumed %d points for user %s", actualPoints, userID)
 			}
 		}
 	}

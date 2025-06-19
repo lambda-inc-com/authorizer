@@ -233,6 +233,12 @@ func LLMProvidersHandler() gin.HandlerFunc {
 				"description": "DeepSeek模型，中文友好的大语言模型",
 				"models":      []string{"deepseek-chat", "deepseek-coder"},
 			},
+			{
+				"name":        "Xai",
+				"type":        "xai",
+				"description": "xai模型，中文友好的大语言模型",
+				"models":      []string{"grok-3-latest", "grok-3-latest"},
+			},
 		}
 
 		c.JSON(http.StatusOK, gin.H{
