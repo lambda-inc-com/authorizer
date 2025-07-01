@@ -2,12 +2,14 @@ package main
 
 import (
 	"flag"
+
 	"github.com/authorizerdev/authorizer/server/authenticators"
 
 	"github.com/authorizerdev/authorizer/server/cli"
 	"github.com/authorizerdev/authorizer/server/constants"
 	"github.com/authorizerdev/authorizer/server/db"
 	"github.com/authorizerdev/authorizer/server/env"
+	"github.com/authorizerdev/authorizer/server/handlers"
 	"github.com/authorizerdev/authorizer/server/logs"
 	"github.com/authorizerdev/authorizer/server/memorystore"
 	"github.com/authorizerdev/authorizer/server/oauth"
@@ -74,6 +76,19 @@ func main() {
 	err = authenticators.InitTOTPStore()
 	if err != nil {
 		log.Fatalln("Error while initializing authenticator: ", err)
+	}
+
+	// initialize LLM service
+	err = handlers.InitLLMService()
+	if err != nil {
+		log.Errorf("Error while initializing LLM service: %v", err)
+		// 不中断启动，LLM服务初始化失败不应该影响整个系统
+	}
+
+	// initialize product data
+	err = handlers.InitProducts()
+	if err != nil {
+		log.Errorf("Error while initializing products: %v", err)
 	}
 
 	router := routes.InitRouter(log)

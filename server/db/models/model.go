@@ -13,6 +13,7 @@ type CollectionList struct {
 	SMSVerificationRequest string
 	Authenticators         string
 	OneApiUser             string
+	UserLLMConfig          string
 }
 
 var (
@@ -31,5 +32,6 @@ var (
 		SMSVerificationRequest: Prefix + "sms_verification_requests",
 		Authenticators:         Prefix + "authenticators",
 		OneApiUser:             "users",
+		UserLLMConfig:          Prefix + "user_llm_configs",
 	}
 )

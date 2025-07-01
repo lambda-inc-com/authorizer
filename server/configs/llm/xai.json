@@ -1,0 +1,19 @@
+{
+  "provider": "xAI",
+  "model_type": "xai",
+  "model_name": "grok-3-latest",
+  "api_key": "${XAI_API_KEY}",
+  "base_url": "https://api.x.ai/v1",
+  "max_tokens": 4096,
+  "token_ratio": {
+    "input": 1,
+    "output": 1
+  },
+  "is_enabled": true,
+  "extra": {
+    "description": "xAI Grok模型配置",
+    "support_models": "grok-beta,grok-vision-beta",
+    "documentation": "https://docs.x.ai/api",
+    "pricing_note": "参考官方定价"
+  }
+} 
