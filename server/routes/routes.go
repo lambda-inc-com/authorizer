@@ -35,7 +35,7 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 	router.POST("/oauth/token", handlers.TokenHandler())
 	router.POST("/oauth/revoke", handlers.RevokeRefreshTokenHandler())
 
-	router.LoadHTMLGlob("/templates/*")
+	router.LoadHTMLGlob("../templates/*")
 	// login page app related routes.
 	app := router.Group("/app")
 	{
@@ -115,6 +115,15 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 		llm.DELETE("/user-configs/:config_id", handlers.DeleteUserLLMConfigHandler())
 		llm.POST("/user-configs/:config_id/set-default", handlers.SetDefaultUserLLMConfigHandler())
 	}
+
+	// 打印所有注册的路由
+	log.Info("=== 注册的路由列表 ===")
+	routes := router.Routes()
+	for _, route := range routes {
+		log.Infof("%-8s %s", route.Method, route.Path)
+	}
+	log.Infof("总共注册了 %d 个路由", len(routes))
+	log.Info("=== 路由列表结束 ===")
 
 	return router
 }
