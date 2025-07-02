@@ -3,12 +3,12 @@
   "model_type": "openai",
   "model_name": "gpt-3.5-turbo",
   "api_key": "${OPENAI_API_KEY}",
-  "base_url": "https://api.openai.com/v1",
+  "base_url": "https://api.gptsapi.net/v1",
   "max_tokens": 4096,
   "token_ratio": {
     "input": 1,
     "output": 1
   },
-  "is_enabled": false,
+  "is_enabled": true,
   "extra": {}
 }

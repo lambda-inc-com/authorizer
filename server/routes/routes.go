@@ -35,7 +35,7 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 	router.POST("/oauth/token", handlers.TokenHandler())
 	router.POST("/oauth/revoke", handlers.RevokeRefreshTokenHandler())
 
-	router.LoadHTMLGlob("/templates/*")
+	router.LoadHTMLGlob("../templates/*")
 	// login page app related routes.
 	app := router.Group("/app")
 	{

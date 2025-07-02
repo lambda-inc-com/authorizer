@@ -1,0 +1,8 @@
+{
+  "简单用户注册工作流": {
+    "success": false,
+    "error": "所有生成尝试都失败了",
+    "workflow": null,
+    "attempts": 3
+  }
+}

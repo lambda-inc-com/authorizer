@@ -1,0 +1,112 @@
+{
+  "nodes": [
+    {
+      "id": "start-001",
+      "type": "workflowStart",
+      "position": {
+        "x": 100,
+        "y": 100
+      },
+      "data": {
+        "label": "工作流开始",
+        "inputs": [
+          {
+            "id": "order-input-001",
+            "attrName": "orderData",
+            "label": "订单数据",
+            "valueType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "id": "db-001",
+      "type": "dbQuery",
+      "position": {
+        "x": 450,
+        "y": 100
+      },
+      "data": {
+        "label": "检查库存",
+        "inputs": [
+          {
+            "id": "query-001",
+            "attrName": "query",
+            "label": "库存查询",
+            "value": "SELECT quantity FROM inventory WHERE product_id = ?"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "stock-result-001",
+            "attrName": "result",
+            "label": "库存数量",
+            "valueType": "string"
+          }
+        ]
+      }
+    },
+    {
+      "id": "condition-001",
+      "type": "condition",
+      "position": {
+        "x": 800,
+        "y": 100
+      },
+      "data": {
+        "label": "库存判断",
+        "conditions": [
+          {
+            "left": {
+              "valuePath": [
+                "db-001",
+                "outputs",
+                "stock-result-001"
+              ]
+            },
+            "operator": "greater_than",
+            "right": {
+              "value": "0"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "end-001",
+      "type": "workflowEnd",
+      "position": {
+        "x": 1150,
+        "y": 100
+      },
+      "data": {
+        "label": "工作流结束",
+        "outputs": [
+          {
+            "id": "final-result-001",
+            "attrName": "result",
+            "label": "处理结果",
+            "valueType": "string"
+          }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "start-001",
+      "target": "db-001",
+      "id": "edge-001"
+    },
+    {
+      "source": "db-001",
+      "target": "condition-001",
+      "id": "edge-002"
+    },
+    {
+      "source": "condition-001",
+      "target": "end-001",
+      "id": "edge-003"
+    }
+  ]
+}
