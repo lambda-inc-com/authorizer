@@ -164,6 +164,9 @@ func (s *Service) Chat(ctx context.Context, userID string, request *providers.Ch
 				config = cfg
 				break
 			}
+			log.Infof("cfg:%v", cfg)
+			log.Infof("config:%v:", cfg)
+
 		}
 
 		if config == nil {
