@@ -285,10 +285,10 @@ async def main():
     try:
         # 运行所有示例
         await example_1_basic_usage()
-        await example_2_validation_only()
-        await example_3_system_status()
-        await example_4_complex_workflow()
-        await example_5_batch_generation()
+        # await example_2_validation_only()
+        # await example_3_system_status()
+        # await example_4_complex_workflow()
+        # await example_5_batch_generation()
         
         print("\n" + "=" * 70)
         print("🎉 所有示例运行完成!")
