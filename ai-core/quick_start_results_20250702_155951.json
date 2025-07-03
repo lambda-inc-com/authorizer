@@ -1,6 +1,0 @@
-{
-  "简单用户注册工作流": {
-    "success": false,
-    "error": "Can't instantiate abstract class UltimateWorkflowGeneratorAgent without an implementation for abstract method '_execute_core_logic'"
-  }
-}
