@@ -55,8 +55,11 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 		dashboard.GET("/:page", handlers.DashboardHandler())
 	}
 
+	userGroup := router.Group("/api")
+	userGroup.GET("/userinfo", handlers.UserInfoHandler())
+
 	// 商品、订单、支付接口
-	productGroup := router.Group("/products")
+	productGroup := router.Group("/api/products")
 	productGroup.Use(middlewares.AuthMiddleware())
 	{
 		productGroup.GET("/list", handlers.ListProducts)
@@ -85,7 +88,7 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 	}
 
 	// 积分相关路由
-	pointsGroup := router.Group("/points")
+	pointsGroup := router.Group("/api/points")
 	pointsGroup.Use(middlewares.AuthMiddleware())
 	{
 		pointsGroup.GET("/me", handlers.GetUserPoints)
@@ -96,7 +99,7 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 	}
 
 	// LLM 相关路由
-	llm := router.Group("/llm")
+	llm := router.Group("/api/llm")
 	{
 		llm.GET("/demo", handlers.LLMDemoHandler())
 		llm.GET("/providers", handlers.LLMProvidersHandler())
