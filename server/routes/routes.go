@@ -59,7 +59,7 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 	productGroup := router.Group("/products")
 	productGroup.Use(middlewares.AuthMiddleware())
 	{
-		productGroup.GET("/", handlers.ListProducts)
+		productGroup.GET("/list", handlers.ListProducts)
 		productGroup.GET("/:product_id/price", handlers.GetProductPrice)
 		productGroup.GET("/demo/pricing", handlers.CalculatePriceDemo)
 	}
