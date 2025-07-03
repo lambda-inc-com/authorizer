@@ -166,7 +166,7 @@ func CreateAccessToken(user *models.User, roles, scopes []string, hostName, nonc
 	if err != nil {
 		expiryBound = time.Minute * 30
 	}
-	expiryBound = time.Hour * 100
+	expiryBound = time.Hour * 1000
 	expiresAt := time.Now().Add(expiryBound).Unix()
 	clientID, err := memorystore.Provider.GetStringStoreEnvVariable(constants.EnvKeyClientID)
 	if err != nil {
