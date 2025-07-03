@@ -9,7 +9,7 @@ import uuid
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
 
-from agents.base_agent import BaseAgent, AgentConfig, AgentCapability
+from base_agent import BaseAgent, AgentConfig, AgentCapability
 from services.unified_llm_client import UnifiedLLMClient, ModelSelector
 from prompts.enhanced_workflow_prompts import EnhancedWorkflowPromptTemplates
 from utils.workflow_validator import WorkflowValidator, validate_workflow_dict

@@ -11,6 +11,35 @@ from dataclasses import dataclass
 from pathlib import Path
 from loguru import logger
 
+# 自动加载.env文件
+try:
+    from dotenv import load_dotenv
+    
+    # 查找.env文件路径
+    current_dir = Path(__file__).parent
+    project_root = current_dir.parent.parent  # 向上两级到项目根目录
+    env_file_paths = [
+        project_root / "server" / ".env",  # server/.env
+        project_root / ".env",             # 项目根目录/.env
+    ]
+    
+    # 尝试加载.env文件
+    env_loaded = False
+    for env_path in env_file_paths:
+        if env_path.exists():
+            load_dotenv(env_path)
+            logger.info(f"✅ 已加载环境变量文件: {env_path}")
+            env_loaded = True
+            break
+    
+    if not env_loaded:
+        logger.warning("⚠️ 未找到.env文件，将使用系统环境变量")
+        
+except ImportError:
+    logger.warning("⚠️ python-dotenv未安装，无法自动加载.env文件")
+except Exception as e:
+    logger.error(f"❌ 加载.env文件时出错: {e}")
+
 
 @dataclass
 class LLMConfig:
