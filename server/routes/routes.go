@@ -67,8 +67,8 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 	orderGroup := router.Group("/orders")
 	orderGroup.Use(middlewares.AuthMiddleware())
 	{
-		orderGroup.POST("/", handlers.CreateOrder)
-		orderGroup.GET("/", handlers.ListOrders)
+		orderGroup.POST("/create", handlers.CreateOrder)
+		orderGroup.GET("/list", handlers.ListOrders)
 	}
 
 	paymentGroup := router.Group("/payments")
