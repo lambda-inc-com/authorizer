@@ -14,29 +14,29 @@ services:
       - app-network
 
   postgres:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - 19897:5432
-    networks:
-      - app-network
+      image: postgres:15-alpine
+      environment:
+        POSTGRES_USER: ${POSTGRES_USER}
+        POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+        POSTGRES_DB: ${POSTGRES_DB}
+      volumes:
+        - postgres_data:/var/lib/postgresql/data
+      ports:
+        - 19897:5432
+      networks:
+        - app-network
 
   nginx:
-    image: nginx:alpine
-    ports:
-      - 19899:80
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d
-      - ./nginx/html:/usr/share/nginx/html
-    depends_on:
-      - authorizer
-    networks:
-      - app-network
+        image: nginx:alpine
+        ports:
+          - 19899:80
+        volumes:
+          - ./nginx/conf.d:/etc/nginx/conf.d
+          - ./nginx/html:/usr/share/nginx/html
+        depends_on:
+          - authorizer
+        networks:
+          - app-network
 
 networks:
   app-network:
