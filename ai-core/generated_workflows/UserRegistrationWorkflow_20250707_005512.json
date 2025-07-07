@@ -1,0 +1,606 @@
+{
+  "success": true,
+  "workflow": {
+    "name": "UserRegistrationWorkflow",
+    "description": "处理用户注册流程，包括验证数据和创建用户记录。",
+    "version": "1.0.0",
+    "nodes": [
+      {
+        "name": "StartUserRegistration",
+        "type": "workflowStart",
+        "desc": "接收用户注册信息作为输入参数，触发用户注册工作流。",
+        "inputs": {
+          "username": {
+            "type": "string",
+            "value": "input",
+            "desc": "用户提供的用户名"
+          },
+          "email": {
+            "type": "string",
+            "value": "input",
+            "desc": "用户提供的邮箱地址"
+          },
+          "password": {
+            "type": "string",
+            "value": "input",
+            "desc": "用户提供的密码"
+          }
+        },
+        "outputs": {},
+        "configs": {},
+        "nextNodes": [
+          "ValidateUserData"
+        ]
+      },
+      {
+        "name": "ValidateUserData",
+        "type": "condition",
+        "desc": "检查输入的用户数据是否满足注册要求，如邮箱格式、密码强度等。",
+        "inputs": {
+          "email": {
+            "type": "string",
+            "value": "$StartUserRegistration.outputs.email",
+            "desc": "用户邮箱"
+          },
+          "password": {
+            "type": "string",
+            "value": "$StartUserRegistration.outputs.password",
+            "desc": "用户密码"
+          }
+        },
+        "outputs": {},
+        "configs": {
+          "conditionGroups": [
+            {
+              "conditions": [
+                {
+                  "left": "$currentNode.inputs.email",
+                  "operator": "regex",
+                  "right": "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$"
+                },
+                {
+                  "left": "$currentNode.inputs.password",
+                  "operator": "length_greater",
+                  "right": 8
+                }
+              ],
+              "nextNode": "CreateUserRecord"
+            }
+          ],
+          "defaultNextNode": "EndUserRegistration"
+        },
+        "nextNodes": [
+          "CreateUserRecord",
+          "EndUserRegistration"
+        ]
+      },
+      {
+        "name": "CreateUserRecord",
+        "type": "dbCreate",
+        "desc": "如果用户数据验证通过，将用户信息存储在数据库中。",
+        "inputs": {
+          "username": {
+            "type": "string",
+            "value": "$StartUserRegistration.outputs.username",
+            "desc": "用户名"
+          },
+          "email": {
+            "type": "string",
+            "value": "$StartUserRegistration.outputs.email",
+            "desc": "邮箱"
+          },
+          "password": {
+            "type": "string",
+            "value": "$StartUserRegistration.outputs.password",
+            "desc": "密码"
+          }
+        },
+        "outputs": {
+          "insertId": {
+            "type": "string",
+            "value": "$currentNodeResult.insertId",
+            "desc": "新创建记录的ID"
+          }
+        },
+        "configs": {
+          "table": "users",
+          "data": {
+            "username": "$currentNode.inputs.username",
+            "email": "$currentNode.inputs.email",
+            "password": "$currentNode.inputs.password"
+          },
+          "timeout": 30
+        },
+        "nextNodes": [
+          "EndUserRegistration"
+        ]
+      },
+      {
+        "name": "EndUserRegistration",
+        "type": "workflowEnd",
+        "desc": "根据用户注册的结果，返回成功或错误信息。",
+        "inputs": {
+          "result": {
+            "type": "string",
+            "value": "conditional",
+            "desc": "根据前面节点的结果返回成功或失败的消息"
+          }
+        },
+        "outputs": {},
+        "configs": {},
+        "nextNodes": [
+          "end"
+        ]
+      }
+    ]
+  },
+  "generation_history": [
+    {
+      "stage": "requirement_analysis",
+      "result": {
+        "analysis": {
+          "requirement_summary": "创建一个用户注册的工作流，包括验证用户数据，创建用户记录，并返回注册结果。",
+          "key_actions": [
+            "验证用户数据的有效性",
+            "在数据库中创建新的用户记录",
+            "返回注册成功或失败的结果"
+          ],
+          "data_entities": [
+            "用户数据"
+          ],
+          "business_rules": [
+            "用户数据必须满足验证条件才能注册",
+            "注册后返回相应的成功或错误信息"
+          ]
+        },
+        "required_nodes": [
+          {
+            "type": "workflowStart",
+            "purpose": "定义工作流的起始点和输入参数",
+            "description": "接收用户注册信息作为输入参数，触发用户注册工作流。",
+            "suggested_name": "StartUserRegistration",
+            "key_configs": {}
+          },
+          {
+            "type": "condition",
+            "purpose": "验证用户数据的有效性",
+            "description": "检查输入的用户数据是否满足注册要求，如邮箱格式、密码强度等。",
+            "suggested_name": "ValidateUserData",
+            "key_configs": {
+              "conditions": "检查邮箱格式、密码强度"
+            }
+          },
+          {
+            "type": "dbCreate",
+            "purpose": "在数据库中创建新的用户记录",
+            "description": "如果用户数据验证通过，将用户信息存储在数据库中。",
+            "suggested_name": "CreateUserRecord",
+            "key_configs": {
+              "table": "users",
+              "data_fields": "用户名, 邮箱, 密码等"
+            }
+          },
+          {
+            "type": "workflowEnd",
+            "purpose": "定义工作流的输出结果",
+            "description": "根据用户注册的结果，返回成功或错误信息。",
+            "suggested_name": "EndUserRegistration",
+            "key_configs": {
+              "output": "注册成功或失败的消息"
+            }
+          }
+        ],
+        "workflow_complexity": "简单",
+        "estimated_nodes_count": 4
+      },
+      "timestamp": "2025-07-07T00:54:30.293482"
+    },
+    {
+      "stage": "workflow_composition",
+      "result": {
+        "workflow": {
+          "name": "UserRegistrationWorkflow",
+          "description": "处理用户注册流程，包括验证数据和创建数据库记录。",
+          "version": "1.0.0",
+          "nodes": [
+            {
+              "name": "StartUserRegistration",
+              "type": "workflowStart",
+              "desc": "接收用户注册信息作为输入参数，触发用户注册工作流。",
+              "inputs": {
+                "username": {
+                  "type": "string",
+                  "value": "input",
+                  "desc": "用户的用户名"
+                },
+                "email": {
+                  "type": "string",
+                  "value": "input",
+                  "desc": "用户的邮箱地址"
+                },
+                "password": {
+                  "type": "string",
+                  "value": "input",
+                  "desc": "用户的密码"
+                }
+              },
+              "outputs": {},
+              "configs": {},
+              "nextNodes": [
+                "ValidateUserData"
+              ]
+            },
+            {
+              "name": "ValidateUserData",
+              "type": "condition",
+              "desc": "检查输入的用户数据是否满足注册要求，如邮箱格式、密码强度等。",
+              "inputs": {
+                "email": {
+                  "type": "string",
+                  "value": "$StartUserRegistration.inputs.email",
+                  "desc": "用户的邮箱地址"
+                },
+                "password": {
+                  "type": "string",
+                  "value": "$StartUserRegistration.inputs.password",
+                  "desc": "用户的密码"
+                }
+              },
+              "outputs": {},
+              "configs": {
+                "conditionGroups": [
+                  {
+                    "conditions": [
+                      {
+                        "field": "email",
+                        "operator": "regex",
+                        "value": "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$"
+                      },
+                      {
+                        "field": "password",
+                        "operator": "length",
+                        "value": ">=8"
+                      }
+                    ],
+                    "nextNode": "CreateUserRecord"
+                  }
+                ],
+                "defaultNextNode": "EndUserRegistration"
+              },
+              "nextNodes": [
+                "CreateUserRecord",
+                "EndUserRegistration"
+              ]
+            },
+            {
+              "name": "CreateUserRecord",
+              "type": "dbCreate",
+              "desc": "如果用户数据验证通过，将用户信息存储在数据库中。",
+              "inputs": {
+                "username": {
+                  "type": "string",
+                  "value": "$StartUserRegistration.inputs.username",
+                  "desc": "用户的用户名"
+                },
+                "email": {
+                  "type": "string",
+                  "value": "$StartUserRegistration.inputs.email",
+                  "desc": "用户的邮箱地址"
+                },
+                "password": {
+                  "type": "string",
+                  "value": "$StartUserRegistration.inputs.password",
+                  "desc": "用户的密码"
+                }
+              },
+              "outputs": {
+                "insertId": {
+                  "type": "string",
+                  "value": "$currentNodeResult.insertId",
+                  "desc": "新创建记录的ID"
+                }
+              },
+              "configs": {
+                "table": "users",
+                "data": {
+                  "username": "$currentNode.inputs.username",
+                  "email": "$currentNode.inputs.email",
+                  "password": "$currentNode.inputs.password"
+                },
+                "timeout": 30
+              },
+              "nextNodes": [
+                "EndUserRegistration"
+              ]
+            },
+            {
+              "name": "EndUserRegistration",
+              "type": "workflowEnd",
+              "desc": "根据用户注册的结果，返回成功或错误信息。",
+              "inputs": {
+                "result": {
+                  "type": "string",
+                  "value": "conditional",
+                  "desc": "根据前面的流程结果返回成功或失败的消息"
+                }
+              },
+              "outputs": {
+                "message": {
+                  "type": "string",
+                  "value": "$currentNode.inputs.result",
+                  "desc": "注册结果消息"
+                }
+              },
+              "configs": {},
+              "nextNodes": [
+                "end"
+              ]
+            }
+          ]
+        },
+        "composition_notes": {
+          "data_flow": [
+            "数据从StartUserRegistration流向ValidateUserData进行验证，然后根据验证结果可能直接结束或创建数据库记录。",
+            "CreateUserRecord节点的输出被用作EndUserRegistration节点的输入，以决定最终的输出消息。"
+          ],
+          "business_logic": [
+            "用户注册流程首先验证输入数据的有效性，然后在数据库中创建用户记录，最后返回注册结果。"
+          ],
+          "key_decisions": [
+            "使用条件节点来决定是否用户数据有效，从而决定是否继续创建记录或直接结束。",
+            "数据库操作节点配置了超时时间为30秒，确保操作的及时性。"
+          ]
+        }
+      },
+      "timestamp": "2025-07-07T00:54:52.604145"
+    },
+    {
+      "stage": "workflow_validation",
+      "result": {
+        "validation_result": {
+          "is_valid": false,
+          "overall_score": 50,
+          "error_count": 5,
+          "warning_count": 0
+        },
+        "detailed_results": {
+          "structure_validation": {
+            "passed": true,
+            "errors": [],
+            "warnings": []
+          },
+          "configuration_validation": {
+            "passed": true,
+            "errors": [],
+            "warnings": []
+          },
+          "logic_validation": {
+            "passed": true,
+            "errors": [],
+            "warnings": []
+          },
+          "executability_validation": {
+            "passed": false,
+            "errors": [
+              "节点 ValidateUserData 的输入 email 包含无效的数据引用: $StartUserRegistration.inputs.email",
+              "节点 ValidateUserData 的输入 password 包含无效的数据引用: $StartUserRegistration.inputs.password",
+              "节点 CreateUserRecord 的输入 username 包含无效的数据引用: $StartUserRegistration.inputs.username",
+              "节点 CreateUserRecord 的输入 email 包含无效的数据引用: $StartUserRegistration.inputs.email",
+              "节点 CreateUserRecord 的输入 password 包含无效的数据引用: $StartUserRegistration.inputs.password"
+            ],
+            "warnings": []
+          }
+        },
+        "all_errors": [
+          "节点 ValidateUserData 的输入 email 包含无效的数据引用: $StartUserRegistration.inputs.email",
+          "节点 ValidateUserData 的输入 password 包含无效的数据引用: $StartUserRegistration.inputs.password",
+          "节点 CreateUserRecord 的输入 username 包含无效的数据引用: $StartUserRegistration.inputs.username",
+          "节点 CreateUserRecord 的输入 email 包含无效的数据引用: $StartUserRegistration.inputs.email",
+          "节点 CreateUserRecord 的输入 password 包含无效的数据引用: $StartUserRegistration.inputs.password"
+        ],
+        "all_warnings": []
+      },
+      "timestamp": "2025-07-07T00:54:52.604555"
+    },
+    {
+      "stage": "workflow_composition",
+      "result": {
+        "workflow": {
+          "name": "UserRegistrationWorkflow",
+          "description": "处理用户注册流程，包括验证数据和创建用户记录。",
+          "version": "1.0.0",
+          "nodes": [
+            {
+              "name": "StartUserRegistration",
+              "type": "workflowStart",
+              "desc": "接收用户注册信息作为输入参数，触发用户注册工作流。",
+              "inputs": {
+                "username": {
+                  "type": "string",
+                  "value": "input",
+                  "desc": "用户提供的用户名"
+                },
+                "email": {
+                  "type": "string",
+                  "value": "input",
+                  "desc": "用户提供的邮箱地址"
+                },
+                "password": {
+                  "type": "string",
+                  "value": "input",
+                  "desc": "用户提供的密码"
+                }
+              },
+              "outputs": {},
+              "configs": {},
+              "nextNodes": [
+                "ValidateUserData"
+              ]
+            },
+            {
+              "name": "ValidateUserData",
+              "type": "condition",
+              "desc": "检查输入的用户数据是否满足注册要求，如邮箱格式、密码强度等。",
+              "inputs": {
+                "email": {
+                  "type": "string",
+                  "value": "$StartUserRegistration.outputs.email",
+                  "desc": "用户邮箱"
+                },
+                "password": {
+                  "type": "string",
+                  "value": "$StartUserRegistration.outputs.password",
+                  "desc": "用户密码"
+                }
+              },
+              "outputs": {},
+              "configs": {
+                "conditionGroups": [
+                  {
+                    "conditions": [
+                      {
+                        "left": "$currentNode.inputs.email",
+                        "operator": "regex",
+                        "right": "^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+$"
+                      },
+                      {
+                        "left": "$currentNode.inputs.password",
+                        "operator": "length_greater",
+                        "right": 8
+                      }
+                    ],
+                    "nextNode": "CreateUserRecord"
+                  }
+                ],
+                "defaultNextNode": "EndUserRegistration"
+              },
+              "nextNodes": [
+                "CreateUserRecord",
+                "EndUserRegistration"
+              ]
+            },
+            {
+              "name": "CreateUserRecord",
+              "type": "dbCreate",
+              "desc": "如果用户数据验证通过，将用户信息存储在数据库中。",
+              "inputs": {
+                "username": {
+                  "type": "string",
+                  "value": "$StartUserRegistration.outputs.username",
+                  "desc": "用户名"
+                },
+                "email": {
+                  "type": "string",
+                  "value": "$StartUserRegistration.outputs.email",
+                  "desc": "邮箱"
+                },
+                "password": {
+                  "type": "string",
+                  "value": "$StartUserRegistration.outputs.password",
+                  "desc": "密码"
+                }
+              },
+              "outputs": {
+                "insertId": {
+                  "type": "string",
+                  "value": "$currentNodeResult.insertId",
+                  "desc": "新创建记录的ID"
+                }
+              },
+              "configs": {
+                "table": "users",
+                "data": {
+                  "username": "$currentNode.inputs.username",
+                  "email": "$currentNode.inputs.email",
+                  "password": "$currentNode.inputs.password"
+                },
+                "timeout": 30
+              },
+              "nextNodes": [
+                "EndUserRegistration"
+              ]
+            },
+            {
+              "name": "EndUserRegistration",
+              "type": "workflowEnd",
+              "desc": "根据用户注册的结果，返回成功或错误信息。",
+              "inputs": {
+                "result": {
+                  "type": "string",
+                  "value": "conditional",
+                  "desc": "根据前面节点的结果返回成功或失败的消息"
+                }
+              },
+              "outputs": {},
+              "configs": {},
+              "nextNodes": [
+                "end"
+              ]
+            }
+          ]
+        },
+        "composition_notes": {
+          "data_flow": [
+            "数据从StartUserRegistration流向ValidateUserData进行验证，验证通过后流向CreateUserRecord创建用户记录，最后流向EndUserRegistration输出结果。"
+          ],
+          "business_logic": [
+            "用户注册流程包括数据验证和记录创建。数据验证不通过直接结束流程，通过则创建记录并返回成功消息。"
+          ],
+          "key_decisions": [
+            "使用条件节点来决定是否用户数据有效，有效则创建记录，无效则结束。"
+          ]
+        }
+      },
+      "timestamp": "2025-07-07T00:55:12.966778"
+    },
+    {
+      "stage": "workflow_validation",
+      "result": {
+        "validation_result": {
+          "is_valid": false,
+          "overall_score": 50,
+          "error_count": 5,
+          "warning_count": 0
+        },
+        "detailed_results": {
+          "structure_validation": {
+            "passed": true,
+            "errors": [],
+            "warnings": []
+          },
+          "configuration_validation": {
+            "passed": true,
+            "errors": [],
+            "warnings": []
+          },
+          "logic_validation": {
+            "passed": true,
+            "errors": [],
+            "warnings": []
+          },
+          "executability_validation": {
+            "passed": false,
+            "errors": [
+              "节点 ValidateUserData 的输入 email 包含无效的数据引用: $StartUserRegistration.outputs.email",
+              "节点 ValidateUserData 的输入 password 包含无效的数据引用: $StartUserRegistration.outputs.password",
+              "节点 CreateUserRecord 的输入 username 包含无效的数据引用: $StartUserRegistration.outputs.username",
+              "节点 CreateUserRecord 的输入 email 包含无效的数据引用: $StartUserRegistration.outputs.email",
+              "节点 CreateUserRecord 的输入 password 包含无效的数据引用: $StartUserRegistration.outputs.password"
+            ],
+            "warnings": []
+          }
+        },
+        "all_errors": [
+          "节点 ValidateUserData 的输入 email 包含无效的数据引用: $StartUserRegistration.outputs.email",
+          "节点 ValidateUserData 的输入 password 包含无效的数据引用: $StartUserRegistration.outputs.password",
+          "节点 CreateUserRecord 的输入 username 包含无效的数据引用: $StartUserRegistration.outputs.username",
+          "节点 CreateUserRecord 的输入 email 包含无效的数据引用: $StartUserRegistration.outputs.email",
+          "节点 CreateUserRecord 的输入 password 包含无效的数据引用: $StartUserRegistration.outputs.password"
+        ],
+        "all_warnings": []
+      },
+      "timestamp": "2025-07-07T00:55:12.967326"
+    }
+  ],
+  "message": "工作流生成成功"
+}

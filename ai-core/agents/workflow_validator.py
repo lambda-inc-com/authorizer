@@ -6,7 +6,7 @@
 import json
 import logging
 from typing import Dict, List, Any, Optional, Set, Tuple
-from ..multi_agent_workflow_generator import BaseAgent, AgentRole, MessageType
+from multi_agent_workflow_generator import BaseAgent, AgentRole, MessageType
 
 logger = logging.getLogger(__name__)
 

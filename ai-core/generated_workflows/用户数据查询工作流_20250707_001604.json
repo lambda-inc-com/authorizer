@@ -1,0 +1,95 @@
+{
+  "generated_at": "2025-07-07T00:16:04.255516",
+  "generator": "多智能体工作流生成系统",
+  "version": "1.0.0",
+  "workflow": {
+    "name": "用户数据查询工作流",
+    "description": "查询和处理用户数据的工作流",
+    "version": "1.0.0",
+    "nodes": [
+      {
+        "name": "WorkflowStart",
+        "type": "workflowStart",
+        "desc": "工作流开始节点，定义输入参数",
+        "inputs": {
+          "userId": {
+            "type": "string",
+            "value": "",
+            "desc": "用户ID"
+          }
+        },
+        "outputs": {
+          "userId": {
+            "type": "string",
+            "value": "$currentNode.inputs.userId",
+            "desc": "用户ID"
+          }
+        },
+        "configs": {},
+        "nextNodes": [
+          "QueryUserData"
+        ]
+      },
+      {
+        "name": "QueryUserData",
+        "type": "dbQuery",
+        "desc": "查询用户数据",
+        "inputs": {
+          "userId": {
+            "type": "string",
+            "value": "$prevNode.outputs.userId",
+            "desc": "用户ID"
+          }
+        },
+        "outputs": {
+          "userData": {
+            "type": "object",
+            "value": "$currentNodeResult",
+            "desc": "用户数据"
+          }
+        },
+        "configs": {
+          "table": "users",
+          "fields": [
+            "id",
+            "name",
+            "email"
+          ],
+          "filters": [
+            {
+              "field": "id",
+              "operator": "=",
+              "value": "$currentNode.inputs.userId"
+            }
+          ]
+        },
+        "nextNodes": [
+          "WorkflowEnd"
+        ]
+      },
+      {
+        "name": "WorkflowEnd",
+        "type": "workflowEnd",
+        "desc": "工作流结束节点",
+        "inputs": {
+          "userData": {
+            "type": "object",
+            "value": "$prevNode.outputs.userData",
+            "desc": "用户数据"
+          }
+        },
+        "outputs": {
+          "result": {
+            "type": "object",
+            "value": "$currentNode.inputs.userData",
+            "desc": "最终结果"
+          }
+        },
+        "configs": {},
+        "nextNodes": [
+          "end"
+        ]
+      }
+    ]
+  }
+}

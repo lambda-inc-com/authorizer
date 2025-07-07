@@ -6,10 +6,21 @@ Multi-Agent Workflow Generation System - Complete Implementation
 import asyncio
 import logging
 from typing import Dict, Any, Optional
-from .multi_agent_workflow_generator import MultiAgentOrchestrator, AgentRole
-from .agents.requirement_analyzer import RequirementAnalyzer
-from .agents.workflow_composer import WorkflowComposer
-from .agents.workflow_validator import WorkflowValidator
+from multi_agent_workflow_generator import MultiAgentOrchestrator, AgentRole
+from agents.requirement_analyzer import RequirementAnalyzer
+from agents.workflow_composer import WorkflowComposer
+from agents.workflow_validator import WorkflowValidator
+import json
+import os
+from pathlib import Path
+import anthropic
+import openai
+from dotenv import load_dotenv
+
+# 加载环境变量 - 从多个可能的位置加载
+load_dotenv()  # 当前目录
+load_dotenv("../.env")  # 上级目录
+load_dotenv("../server/.env")  # server目录
 
 logger = logging.getLogger(__name__)
 
@@ -17,222 +28,203 @@ logger = logging.getLogger(__name__)
 class LLMClient:
     """LLM客户端接口"""
     
-    def __init__(self, api_key: str = None, base_url: str = None):
-        self.api_key = api_key
-        self.base_url = base_url
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        self.config = config or self._load_default_config()
+        self.client = self._initialize_client()
     
-    async def chat_completion(self, messages: list, model: str = "gpt-4", **kwargs) -> str:
+    def _load_default_config(self) -> Dict[str, Any]:
+        """加载默认配置 - 优先使用Claude"""
+        config_path = Path("../configs/llm/claude.json")
+        if config_path.exists():
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                # 处理环境变量
+                if config.get("api_key", "").startswith("${"):
+                    env_var = config["api_key"][2:-1]
+                    config["api_key"] = os.getenv(env_var, "")
+                return config
+        
+        # 如果没有配置文件，使用环境变量
+        return {
+            "provider": "Anthropic",
+            "model_type": "claude",
+            "model_name": "claude-3-sonnet-20240229",
+            "api_key": os.getenv("CLAUDE_API_KEY", ""),
+            "base_url": "https://api.anthropic.com/v1",
+            "max_tokens": 4096,
+            "is_enabled": True
+        }
+    
+    def _initialize_client(self):
+        """初始化客户端"""
+        if not self.config.get("api_key"):
+            logger.error("未找到API密钥，请设置环境变量 CLAUDE_API_KEY")
+            return None
+        
+        provider = self.config.get("provider", "").lower()
+        
+        if provider == "anthropic":
+            # 使用自定义的 base_url
+            base_url = self.config.get("base_url", "https://api.anthropic.com/v1")
+            
+            # 检查是否是代理服务，如果是则使用 OpenAI 客户端
+            if "gptsapi.net" in base_url:
+                return openai.OpenAI(
+                    api_key=self.config["api_key"],
+                    base_url=base_url + "/v1"
+                )
+            else:
+                return anthropic.Anthropic(
+                    api_key=self.config["api_key"],
+                    base_url=base_url
+                )
+        elif provider == "openai":
+            base_url = self.config.get("base_url", "https://api.openai.com/v1")
+            return openai.OpenAI(
+                api_key=self.config["api_key"],
+                base_url=base_url
+            )
+        else:
+            logger.error(f"不支持的提供商: {provider}")
+            return None
+    
+    async def chat_completion(self, messages: list, model: str = None, **kwargs) -> str:
         """
         LLM聊天完成接口
-        这里需要集成实际的LLM服务，比如OpenAI API
         """
-        # 这里应该调用实际的LLM服务
-        # 临时返回模拟响应
-        return self._mock_llm_response(messages, model, **kwargs)
-    
-    def _mock_llm_response(self, messages: list, model: str, **kwargs) -> str:
-        """模拟LLM响应，用于测试"""
-        user_message = messages[-1]["content"] if messages else ""
+        if not self.client:
+            raise RuntimeError("LLM客户端未初始化，请检查API密钥配置")
         
-        # 根据用户消息类型返回不同的模拟响应
-        if "分析以下用户需求" in user_message:
-            return self._mock_requirement_analysis_response()
-        elif "请根据用户需求和需求分析结果" in user_message:
-            return self._mock_workflow_composition_response()
-        elif "请对以下工作流进行全面验证" in user_message:
-            return self._mock_validation_response()
-        else:
-            return '{"error": "未知的请求类型"}'
+        try:
+            # 使用配置中的模型名称
+            model_name = model or self.config.get("model_name", "claude-3-sonnet-20240229")
+            max_tokens = kwargs.get("max_tokens", self.config.get("max_tokens", 4096))
+            temperature = kwargs.get("temperature", 0.3)
+            
+            provider = self.config.get("provider", "").lower()
+            
+            if provider == "anthropic":
+                # Claude API调用
+                response = await self._call_claude_api(messages, model_name, max_tokens, temperature)
+            elif provider == "openai":
+                # OpenAI API调用
+                response = await self._call_openai_api(messages, model_name, max_tokens, temperature)
+            else:
+                raise ValueError(f"不支持的提供商: {provider}")
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"LLM调用失败: {str(e)}")
+            raise
     
-    def _mock_requirement_analysis_response(self) -> str:
-        """模拟需求分析响应"""
-        return """```json
-{
-  "analysis": {
-    "requirement_summary": "用户需要创建一个简单的数据查询和处理工作流",
-    "key_actions": ["查询数据", "处理数据", "返回结果"],
-    "data_entities": ["用户数据", "查询结果"],
-    "business_rules": ["数据必须存在", "结果必须格式化"]
-  },
-  "required_nodes": [
-    {
-      "type": "workflowStart",
-      "purpose": "工作流开始节点",
-      "description": "定义工作流的输入参数和触发方式",
-      "suggested_name": "WorkflowStart",
-      "key_configs": {}
-    },
-    {
-      "type": "dbQuery",
-      "purpose": "查询用户数据",
-      "description": "从数据库中查询用户信息",
-      "suggested_name": "QueryUserData",
-      "key_configs": {
-        "table": "users",
-        "fields": ["id", "name", "email"]
-      }
-    },
-    {
-      "type": "workflowEnd",
-      "purpose": "工作流结束节点",
-      "description": "定义工作流的输出结果",
-      "suggested_name": "WorkflowEnd",
-      "key_configs": {}
-    }
-  ],
-  "workflow_complexity": "简单",
-  "estimated_nodes_count": 3
-}
-```"""
+    async def _call_claude_api(self, messages: list, model: str, max_tokens: int, temperature: float) -> str:
+        """调用Claude API - 兼容代理服务"""
+        try:
+            # 检查是否是代理服务（gptsapi.net）
+            if "gptsapi.net" in self.config.get("base_url", ""):
+                # 使用 OpenAI 兼容格式
+                return await self._call_openai_compatible_api(messages, model, max_tokens, temperature)
+            else:
+                # 使用标准 Claude API 格式
+                return await self._call_standard_claude_api(messages, model, max_tokens, temperature)
+            
+        except Exception as e:
+            logger.error(f"Claude API调用失败: {str(e)}")
+            raise
     
-    def _mock_workflow_composition_response(self) -> str:
-        """模拟工作流组合响应"""
-        return """```json
-{
-  "workflow": {
-    "name": "用户数据查询工作流",
-    "description": "查询和处理用户数据的工作流",
-    "version": "1.0.0",
-    "nodes": [
-      {
-        "name": "WorkflowStart",
-        "type": "workflowStart",
-        "desc": "工作流开始节点，定义输入参数",
-        "inputs": {
-          "userId": {
-            "type": "string",
-            "value": "",
-            "desc": "用户ID"
-          }
-        },
-        "outputs": {
-          "userId": {
-            "type": "string",
-            "value": "$currentNode.inputs.userId",
-            "desc": "用户ID"
-          }
-        },
-        "configs": {},
-        "nextNodes": ["QueryUserData"]
-      },
-      {
-        "name": "QueryUserData",
-        "type": "dbQuery",
-        "desc": "查询用户数据",
-        "inputs": {
-          "userId": {
-            "type": "string",
-            "value": "$prevNode.outputs.userId",
-            "desc": "用户ID"
-          }
-        },
-        "outputs": {
-          "userData": {
-            "type": "object",
-            "value": "$currentNodeResult",
-            "desc": "用户数据"
-          }
-        },
-        "configs": {
-          "table": "users",
-          "fields": ["id", "name", "email"],
-          "filters": [
-            {
-              "field": "id",
-              "operator": "=",
-              "value": "$currentNode.inputs.userId"
-            }
-          ]
-        },
-        "nextNodes": ["WorkflowEnd"]
-      },
-      {
-        "name": "WorkflowEnd",
-        "type": "workflowEnd",
-        "desc": "工作流结束节点",
-        "inputs": {
-          "userData": {
-            "type": "object",
-            "value": "$prevNode.outputs.userData",
-            "desc": "用户数据"
-          }
-        },
-        "outputs": {
-          "result": {
-            "type": "object",
-            "value": "$currentNode.inputs.userData",
-            "desc": "最终结果"
-          }
-        },
-        "configs": {},
-        "nextNodes": ["end"]
-      }
-    ]
-  },
-  "composition_notes": {
-    "data_flow": ["从开始节点获取userId", "传递到查询节点", "查询结果传递到结束节点"],
-    "business_logic": ["简单的用户数据查询流程"],
-    "key_decisions": ["使用数据库查询节点获取用户信息"]
-  }
-}
-```"""
+    async def _call_standard_claude_api(self, messages: list, model: str, max_tokens: int, temperature: float) -> str:
+        """调用标准Claude API"""
+        # 转换消息格式
+        claude_messages = []
+        system_message = ""
+        
+        for msg in messages:
+            if msg["role"] == "system":
+                system_message = msg["content"]
+            else:
+                claude_messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+        
+        # 异步调用
+        response = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self.client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system_message,
+                messages=claude_messages
+            )
+        )
+        
+        return response.content[0].text
     
-    def _mock_validation_response(self) -> str:
-        """模拟验证响应"""
-        return """```json
-{
-  "validation_result": {
-    "is_valid": true,
-    "overall_score": 95,
-    "error_count": 0,
-    "warning_count": 1
-  },
-  "detailed_results": {
-    "structure_validation": {
-      "passed": true,
-      "errors": [],
-      "warnings": []
-    },
-    "configuration_validation": {
-      "passed": true,
-      "errors": [],
-      "warnings": ["建议为数据库查询添加超时配置"]
-    },
-    "logic_validation": {
-      "passed": true,
-      "errors": [],
-      "warnings": []
-    },
-    "executability_validation": {
-      "passed": true,
-      "errors": [],
-      "warnings": []
-    }
-  },
-  "suggestions": [
-    {
-      "type": "warning",
-      "description": "建议为数据库查询添加超时配置",
-      "node": "QueryUserData",
-      "solution": "在configs中添加timeout字段"
-    }
-  ],
-  "compliance_check": {
-    "node_specification_compliance": true,
-    "data_flow_compliance": true,
-    "business_logic_compliance": true
-  }
-}
-```"""
+    async def _call_openai_compatible_api(self, messages: list, model: str, max_tokens: int, temperature: float) -> str:
+        """调用OpenAI兼容的API（用于代理服务）"""
+        # 处理 system 消息 - 合并到第一个 user 消息中
+        processed_messages = []
+        system_content = ""
+        
+        for msg in messages:
+            if msg["role"] == "system":
+                system_content = msg["content"]
+            else:
+                processed_messages.append(msg)
+        
+        # 如果有 system 消息，合并到第一个 user 消息中
+        if system_content and processed_messages:
+            first_user_msg = processed_messages[0]
+            if first_user_msg["role"] == "user":
+                first_user_msg["content"] = f"{system_content}\n\n{first_user_msg['content']}"
+        
+        # 如果没有 user 消息，创建一个
+        if not processed_messages:
+            processed_messages = [{"role": "user", "content": system_content or "Hello"}]
+        
+        # 异步调用
+        response = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self.client.chat.completions.create(
+                model=model,
+                messages=processed_messages,
+                max_tokens=max_tokens,
+                temperature=temperature
+            )
+        )
+        
+        return response.choices[0].message.content
+    
+    async def _call_openai_api(self, messages: list, model: str, max_tokens: int, temperature: float) -> str:
+        """调用OpenAI API"""
+        try:
+            # 异步调用
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature
+                )
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            logger.error(f"OpenAI API调用失败: {str(e)}")
+            raise
 
 
 class WorkflowGenerationSystem(MultiAgentOrchestrator):
     """工作流生成系统 - 完整实现"""
     
     def __init__(self, llm_client: Optional[LLMClient] = None):
-        super().__init__()
+        # 先设置 llm_client，然后调用父类构造函数
         self.llm_client = llm_client or LLMClient()
-        self._setup_agents()
+        super().__init__()
     
     def _setup_agents(self):
         """设置智能体"""
