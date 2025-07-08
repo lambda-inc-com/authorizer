@@ -55,7 +55,7 @@ import (
 const (
 	authorizeWebMessageTemplate = "authorize_web_message.tmpl"
 	authorizeFormPostTemplate   = "authorize_form_post.tmpl"
-	baseAppPath                 = "/app"
+	baseAppPath                 = "/myAuthorizer/app"
 	signupPath                  = "/app/signup"
 )
 
