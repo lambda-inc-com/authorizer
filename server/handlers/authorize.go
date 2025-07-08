@@ -68,6 +68,7 @@ const (
 // code_challenge_method = to prevent CSRF attack [only sh256 is supported]
 func AuthorizeHandler() gin.HandlerFunc {
 	return func(gc *gin.Context) {
+		log.Println("++++++++++++++++66666")
 		log.Println("++++++++++++++++++++++++")
 		redirectURI := strings.TrimSpace(gc.Query("redirect_uri"))
 		responseType := strings.TrimSpace(gc.Query("response_type"))
