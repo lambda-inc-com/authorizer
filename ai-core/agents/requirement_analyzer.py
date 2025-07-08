@@ -140,7 +140,7 @@ class RequirementAnalyzer(BaseAgent):
 ## 注意事项
 - 必须包含workflowStart和workflowEnd节点
 - 仔细考虑数据流和业务逻辑
-- 对于复杂的业务规则，建议使用condition节点
+- 对于需要条件判断的业务规则，建议使用condition节点
 - 对于需要保证数据一致性的操作，考虑使用transaction节点
 - 提供的节点名称要具有描述性且符合PascalCase规范"""
     
@@ -174,7 +174,7 @@ class RequirementAnalyzer(BaseAgent):
             # 调用LLM进行需求分析
             response = await self.llm_client.chat_completion(
                 messages=messages,
-                model="gpt-4",
+                model="claude-4-sonnet",
                 temperature=0.3,
                 max_tokens=2000
             )

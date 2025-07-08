@@ -1,0 +1,325 @@
+{
+  "success": true,
+  "workflow": {
+    "name": "InventoryQueryWorkflow",
+    "description": "查询库存的工作流程",
+    "version": "1.0.0",
+    "nodes": [
+      {
+        "name": "WorkflowStart",
+        "type": "workflowStart",
+        "desc": "工作流开始节点，定义工作流的输入参数",
+        "inputs": {},
+        "outputs": {},
+        "configs": {},
+        "nextNodes": [
+          "DbQueryInventory"
+        ]
+      },
+      {
+        "name": "DbQueryInventory",
+        "type": "dbQuery",
+        "desc": "执行数据库查询操作以获取库存信息",
+        "inputs": {},
+        "outputs": {
+          "result": {
+            "type": "array",
+            "value": "$currentNodeResult",
+            "desc": "查询结果"
+          }
+        },
+        "configs": {
+          "table": "inventory",
+          "fields": [
+            "item_id",
+            "item_name",
+            "quantity"
+          ],
+          "filters": [],
+          "sorts": [
+            {
+              "field": "item_name",
+              "order": "ASC"
+            }
+          ],
+          "limit": 100,
+          "timeout": 30
+        },
+        "nextNodes": [
+          "WorkflowEnd"
+        ]
+      },
+      {
+        "name": "WorkflowEnd",
+        "type": "workflowEnd",
+        "desc": "工作流结束节点，定义工作流的输出结果",
+        "inputs": {
+          "inventoryData": {
+            "type": "array",
+            "value": "$DbQueryInventory.outputs.result",
+            "desc": "库存查询结果"
+          }
+        },
+        "outputs": {},
+        "configs": {},
+        "nextNodes": [
+          "end"
+        ]
+      }
+    ]
+  },
+  "generation_history": [
+    {
+      "stage": "workflow_composition",
+      "result": {
+        "workflow": {
+          "name": "InventoryQueryWorkflow",
+          "description": "查询库存的工作流程",
+          "version": "1.0.0",
+          "nodes": [
+            {
+              "name": "WorkflowStart",
+              "type": "workflowStart",
+              "desc": "工作流开始节点，定义工作流的输入参数",
+              "inputs": {},
+              "outputs": {},
+              "configs": {},
+              "nextNodes": [
+                "DbQueryInventory"
+              ]
+            },
+            {
+              "name": "DbQueryInventory",
+              "type": "dbQuery",
+              "desc": "执行数据库查询操作以获取库存信息",
+              "inputs": {},
+              "outputs": {
+                "result": {
+                  "type": "array",
+                  "value": "$currentNodeResult",
+                  "desc": "查询结果"
+                }
+              },
+              "configs": {
+                "table": "inventory",
+                "fields": [
+                  "item_id",
+                  "quantity"
+                ],
+                "filters": [],
+                "sorts": [
+                  {
+                    "field": "item_id",
+                    "order": "asc"
+                  }
+                ],
+                "limit": 100,
+                "timeout": 30
+              },
+              "nextNodes": [
+                "WorkflowEnd"
+              ]
+            },
+            {
+              "name": "WorkflowEnd",
+              "type": "workflowEnd",
+              "desc": "工作流结束节点，定义工作流的输出结果",
+              "inputs": {
+                "inventoryData": {
+                  "type": "array",
+                  "value": "$DbQueryInventory.outputs.result",
+                  "desc": "库存查询结果"
+                }
+              },
+              "outputs": {},
+              "configs": {},
+              "nextNodes": [
+                "end"
+              ]
+            }
+          ]
+        },
+        "composition_notes": {
+          "data_flow": [
+            "数据从DbQueryInventory节点的输出直接传递到WorkflowEnd节点的输入，确保数据流的连贯性和完整性。"
+          ],
+          "business_logic": [
+            "整个工作流从开始到结束，只涉及到查询库存的操作，确保业务逻辑的简洁和专一性。"
+          ],
+          "key_decisions": [
+            "选择DbQuery节点来执行库存查询，因为它可以直接从数据库中获取所需的库存数据。"
+          ]
+        }
+      },
+      "timestamp": "2025-07-07T15:17:37.821302"
+    },
+    {
+      "stage": "workflow_validation",
+      "result": {
+        "validation_result": {
+          "is_valid": false,
+          "overall_score": 90,
+          "error_count": 1,
+          "warning_count": 0
+        },
+        "detailed_results": {
+          "structure_validation": {
+            "passed": true,
+            "errors": [],
+            "warnings": []
+          },
+          "configuration_validation": {
+            "passed": true,
+            "errors": [],
+            "warnings": []
+          },
+          "logic_validation": {
+            "passed": true,
+            "errors": [],
+            "warnings": []
+          },
+          "executability_validation": {
+            "passed": false,
+            "errors": [
+              "节点 WorkflowEnd 的输入 inventoryData 包含无效的数据引用: $DbQueryInventory.outputs.result"
+            ],
+            "warnings": []
+          }
+        },
+        "all_errors": [
+          "节点 WorkflowEnd 的输入 inventoryData 包含无效的数据引用: $DbQueryInventory.outputs.result"
+        ],
+        "all_warnings": []
+      },
+      "timestamp": "2025-07-07T15:17:37.821797"
+    },
+    {
+      "stage": "workflow_composition",
+      "result": {
+        "workflow": {
+          "name": "InventoryQueryWorkflow",
+          "description": "查询库存的工作流程",
+          "version": "1.0.0",
+          "nodes": [
+            {
+              "name": "WorkflowStart",
+              "type": "workflowStart",
+              "desc": "工作流开始节点，定义工作流的输入参数",
+              "inputs": {},
+              "outputs": {},
+              "configs": {},
+              "nextNodes": [
+                "DbQueryInventory"
+              ]
+            },
+            {
+              "name": "DbQueryInventory",
+              "type": "dbQuery",
+              "desc": "执行数据库查询操作以获取库存信息",
+              "inputs": {},
+              "outputs": {
+                "result": {
+                  "type": "array",
+                  "value": "$currentNodeResult",
+                  "desc": "查询结果"
+                }
+              },
+              "configs": {
+                "table": "inventory",
+                "fields": [
+                  "item_id",
+                  "item_name",
+                  "quantity"
+                ],
+                "filters": [],
+                "sorts": [
+                  {
+                    "field": "item_name",
+                    "order": "ASC"
+                  }
+                ],
+                "limit": 100,
+                "timeout": 30
+              },
+              "nextNodes": [
+                "WorkflowEnd"
+              ]
+            },
+            {
+              "name": "WorkflowEnd",
+              "type": "workflowEnd",
+              "desc": "工作流结束节点，定义工作流的输出结果",
+              "inputs": {
+                "inventoryData": {
+                  "type": "array",
+                  "value": "$DbQueryInventory.outputs.result",
+                  "desc": "库存查询结果"
+                }
+              },
+              "outputs": {},
+              "configs": {},
+              "nextNodes": [
+                "end"
+              ]
+            }
+          ]
+        },
+        "composition_notes": {
+          "data_flow": [
+            "数据从WorkflowStart流向DbQueryInventory进行库存查询，查询结果被传递到WorkflowEnd作为最终输出。"
+          ],
+          "business_logic": [
+            "整个工作流是为了查询库存信息，从数据库中获取库存数据，并将查询结果输出。"
+          ],
+          "key_decisions": [
+            "选择DbQuery节点来执行库存查询，因为它可以直接从数据库中获取所需的数据。",
+            "设置排序为按item_name升序，以便结果更加有序。",
+            "限制查询结果的数量为100，以防止过多数据的处理。"
+          ]
+        }
+      },
+      "timestamp": "2025-07-07T15:17:57.301326"
+    },
+    {
+      "stage": "workflow_validation",
+      "result": {
+        "validation_result": {
+          "is_valid": false,
+          "overall_score": 90,
+          "error_count": 1,
+          "warning_count": 0
+        },
+        "detailed_results": {
+          "structure_validation": {
+            "passed": true,
+            "errors": [],
+            "warnings": []
+          },
+          "configuration_validation": {
+            "passed": true,
+            "errors": [],
+            "warnings": []
+          },
+          "logic_validation": {
+            "passed": true,
+            "errors": [],
+            "warnings": []
+          },
+          "executability_validation": {
+            "passed": false,
+            "errors": [
+              "节点 WorkflowEnd 的输入 inventoryData 包含无效的数据引用: $DbQueryInventory.outputs.result"
+            ],
+            "warnings": []
+          }
+        },
+        "all_errors": [
+          "节点 WorkflowEnd 的输入 inventoryData 包含无效的数据引用: $DbQueryInventory.outputs.result"
+        ],
+        "all_warnings": []
+      },
+      "timestamp": "2025-07-07T15:17:57.301471"
+    }
+  ],
+  "message": "工作流生成成功"
+}

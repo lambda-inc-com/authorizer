@@ -1,0 +1,169 @@
+{
+  "generated_at": "2025-07-07T15:24:00.135583",
+  "generator": "多智能体工作流生成系统",
+  "version": "1.0.0",
+  "workflow": {
+    "name": "InventoryCheckAndOrderPlacement",
+    "description": "用户查询库存并下单的工作流",
+    "version": "1.0.0",
+    "nodes": [
+      {
+        "name": "WorkflowStart",
+        "type": "workflowStart",
+        "desc": "工作流开始节点，定义工作流的输入参数",
+        "inputs": {},
+        "outputs": {},
+        "configs": {},
+        "nextNodes": [
+          "ProductAvailabilityCheck"
+        ]
+      },
+      {
+        "name": "ProductAvailabilityCheck",
+        "type": "dbQuery",
+        "desc": "检查产品库存",
+        "inputs": {
+          "productId": {
+            "type": "string",
+            "value": "$currentNode.inputs.productId",
+            "desc": "产品ID"
+          }
+        },
+        "outputs": {
+          "result": {
+            "type": "array",
+            "value": "$currentNodeResult",
+            "desc": "查询结果"
+          }
+        },
+        "configs": {
+          "table": "inventory",
+          "fields": [
+            "productId",
+            "stock"
+          ],
+          "filters": [
+            {
+              "field": "productId",
+              "operator": "=",
+              "value": "$currentNode.inputs.productId"
+            }
+          ],
+          "limit": 1,
+          "timeout": 30
+        },
+        "nextNodes": [
+          "CheckStockAvailability"
+        ]
+      },
+      {
+        "name": "CheckStockAvailability",
+        "type": "condition",
+        "desc": "检查库存是否足够",
+        "inputs": {
+          "stock": {
+            "type": "number",
+            "value": "$ProductAvailabilityCheck.outputs.result[0].stock",
+            "desc": "库存数量"
+          }
+        },
+        "outputs": {},
+        "configs": {
+          "conditionGroups": [
+            {
+              "conditions": [
+                {
+                  "left": "$currentNode.inputs.stock",
+                  "operator": ">",
+                  "right": 0
+                }
+              ],
+              "nextNode": "PlaceOrder"
+            }
+          ],
+          "defaultNextNode": "OutOfStockResponse"
+        },
+        "nextNodes": [
+          "PlaceOrder",
+          "OutOfStockResponse"
+        ]
+      },
+      {
+        "name": "PlaceOrder",
+        "type": "dbCreate",
+        "desc": "在数据库中创建订单",
+        "inputs": {
+          "productId": {
+            "type": "string",
+            "value": "$ProductAvailabilityCheck.outputs.result[0].productId",
+            "desc": "产品ID"
+          },
+          "quantity": {
+            "type": "number",
+            "value": "1",
+            "desc": "订单数量"
+          }
+        },
+        "outputs": {
+          "insertId": {
+            "type": "string",
+            "value": "$currentNodeResult.insertId",
+            "desc": "新创建订单的ID"
+          }
+        },
+        "configs": {
+          "table": "orders",
+          "data": {
+            "productId": "$currentNode.inputs.productId",
+            "quantity": "$currentNode.inputs.quantity"
+          },
+          "timeout": 30
+        },
+        "nextNodes": [
+          "WorkflowEnd"
+        ]
+      },
+      {
+        "name": "OutOfStockResponse",
+        "type": "code",
+        "desc": "处理库存不足的情况",
+        "inputs": {},
+        "outputs": {
+          "message": {
+            "type": "string",
+            "value": "'Product is out of stock'",
+            "desc": "库存不足消息"
+          }
+        },
+        "configs": {
+          "file": {
+            "name": "main.ts",
+            "content": "return { message: 'Product is out of stock' };"
+          },
+          "dependencies": [],
+          "timeout": 30
+        },
+        "nextNodes": [
+          "WorkflowEnd"
+        ]
+      },
+      {
+        "name": "WorkflowEnd",
+        "type": "workflowEnd",
+        "desc": "工作流结束节点，定义工作流的输出结果",
+        "inputs": {
+          "finalMessage": {
+            "type": "string",
+            "value": "$prevNode.outputs.message",
+            "desc": "最终消息"
+          }
+        },
+        "outputs": {},
+        "configs": {},
+        "nextNodes": [
+          "end"
+        ]
+      }
+    ]
+  }
+}
