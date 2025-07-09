@@ -67,21 +67,21 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 		productGroup.GET("/demo/pricing", handlers.CalculatePriceDemo)
 	}
 
-	orderGroup := router.Group("/orders")
+	orderGroup := router.Group("/api/orders")
 	orderGroup.Use(middlewares.AuthMiddleware())
 	{
 		orderGroup.POST("/create", handlers.CreateOrder)
 		orderGroup.GET("/list", handlers.ListOrders)
 	}
 
-	paymentGroup := router.Group("/payments")
+	paymentGroup := router.Group("/api/payments")
 	paymentGroup.Use(middlewares.AuthMiddleware())
 	{
 		paymentGroup.POST("/:order_id", handlers.PayOrder)
 	}
 
 	// 订阅状态相关路由
-	subscriptionGroup := router.Group("/subscription")
+	subscriptionGroup := router.Group("/api/subscription")
 	subscriptionGroup.Use(middlewares.AuthMiddleware())
 	{
 		subscriptionGroup.GET("/status", handlers.GetUserSubscriptionHandler())
