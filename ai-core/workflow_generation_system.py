@@ -5,7 +5,7 @@ Multi-Agent Workflow Generation System - Complete Implementation
 
 import asyncio
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from multi_agent_workflow_generator import MultiAgentOrchestrator, AgentRole
 from agents.requirement_analyzer import RequirementAnalyzer
 from agents.workflow_composer import WorkflowComposer
@@ -17,10 +17,10 @@ import anthropic
 import openai
 from dotenv import load_dotenv
 
-# 加载环境变量 - 从多个可能的位置加载
-load_dotenv()  # 当前目录
+# 加载环境变量 - 优先使用server目录下的.env文件
+load_dotenv("../server/.env")  # server目录 (优先)
 load_dotenv("../.env")  # 上级目录
-load_dotenv("../server/.env")  # server目录
+load_dotenv()  # 当前目录 (最后)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ class LLMClient:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or self._load_default_config()
         self.client = self._initialize_client()
+        self.available_models = self._get_available_models()
     
     def _load_default_config(self) -> Dict[str, Any]:
         """加载默认配置 - 优先使用Claude"""
@@ -48,7 +49,7 @@ class LLMClient:
         return {
             "provider": "Anthropic",
             "model_type": "claude",
-            "model_name": "claude-3-sonnet-20240229",
+            "model_name": "claude-3-5-sonnet-20241022",  # 更新为最新可用的模型
             "api_key": os.getenv("CLAUDE_API_KEY", ""),
             "base_url": "https://api.anthropic.com/v1",
             "max_tokens": 4096,
@@ -216,6 +217,158 @@ class LLMClient:
         except Exception as e:
             logger.error(f"OpenAI API调用失败: {str(e)}")
             raise
+    
+    def _get_available_models(self) -> Dict[str, List[str]]:
+        """获取不同服务提供商的可用模型列表"""
+        return {
+            "anthropic_official": [
+                "claude-3-5-sonnet-20241022",
+                "claude-3-5-haiku-20241022", 
+                "claude-3-opus-20240229",
+                "claude-3-sonnet-20240229",
+                "claude-3-haiku-20240307"
+            ],
+            "gptsapi_proxy": [
+                "claude-3-5-sonnet-20241022",
+                "claude-3-5-sonnet",
+                "claude-3-sonnet-20240229",
+                "claude-3-sonnet",
+                "claude-3-haiku-20240307",
+                "claude-3-haiku",
+                "gpt-4o",
+                "gpt-4o-mini",
+                "gpt-4-turbo",
+                "gpt-3.5-turbo"
+            ],
+            "openai_official": [
+                "gpt-4o",
+                "gpt-4o-mini", 
+                "gpt-4-turbo",
+                "gpt-4",
+                "gpt-3.5-turbo"
+            ]
+        }
+    
+    async def test_connection_and_model(self) -> Dict[str, Any]:
+        """测试连接和模型可用性"""
+        if not self.client:
+            return {
+                "success": False,
+                "error": "客户端未初始化",
+                "model": None
+            }
+        
+        # 获取基础URL和提供商信息
+        base_url = self.config.get("base_url", "")
+        provider = self.config.get("provider", "").lower()
+        current_model = self.config.get("model_name", "")
+        
+        logger.info(f"测试连接 - 提供商: {provider}, 基础URL: {base_url}, 模型: {current_model}")
+        
+        # 确定服务类型
+        service_type = "anthropic_official"
+        if "gptsapi.net" in base_url:
+            service_type = "gptsapi_proxy"
+        elif provider == "openai":
+            service_type = "openai_official"
+        
+        available_models = self.available_models.get(service_type, [])
+        
+        # 如果当前模型不在可用列表中，尝试找一个替代品
+        if current_model not in available_models:
+            logger.warning(f"当前模型 {current_model} 不在 {service_type} 的可用列表中")
+            if available_models:
+                new_model = available_models[0]  # 使用第一个可用模型
+                logger.info(f"尝试使用替代模型: {new_model}")
+                self.config["model_name"] = new_model
+                current_model = new_model
+        
+        # 测试简单请求
+        try:
+            test_messages = [
+                {"role": "user", "content": "请回复'测试成功'"}
+            ]
+            
+            response = await self.chat_completion(
+                messages=test_messages,
+                model=current_model,
+                max_tokens=10,
+                temperature=0
+            )
+            
+            return {
+                "success": True,
+                "model": current_model,
+                "service_type": service_type,
+                "response": response,
+                "available_models": available_models
+            }
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            
+            # 如果是模型不存在错误，尝试其他模型
+            if "model not found" in error_msg or "model" in error_msg:
+                logger.warning(f"模型 {current_model} 测试失败: {str(e)}")
+                
+                # 尝试其他可用模型
+                for alt_model in available_models:
+                    if alt_model != current_model:
+                        try:
+                            logger.info(f"尝试备用模型: {alt_model}")
+                            self.config["model_name"] = alt_model
+                            
+                            response = await self.chat_completion(
+                                messages=test_messages,
+                                model=alt_model,
+                                max_tokens=10,
+                                temperature=0
+                            )
+                            
+                            logger.info(f"备用模型 {alt_model} 测试成功")
+                            return {
+                                "success": True,
+                                "model": alt_model,
+                                "service_type": service_type,
+                                "response": response,
+                                "available_models": available_models,
+                                "note": f"已从 {current_model} 切换到 {alt_model}"
+                            }
+                            
+                        except Exception as alt_e:
+                            logger.warning(f"备用模型 {alt_model} 也失败: {str(alt_e)}")
+                            continue
+            
+            return {
+                "success": False,
+                "error": str(e),
+                "model": current_model,
+                "service_type": service_type,
+                "available_models": available_models
+            }
+    
+    def get_recommended_models(self) -> Dict[str, str]:
+        """根据配置推荐最佳模型"""
+        base_url = self.config.get("base_url", "")
+        
+        if "gptsapi.net" in base_url:
+            return {
+                "primary": "claude-3-5-sonnet-20241022",
+                "fallback": "gpt-4o-mini",
+                "service": "gptsapi_proxy"
+            }
+        elif self.config.get("provider", "").lower() == "openai":
+            return {
+                "primary": "gpt-4o-mini",
+                "fallback": "gpt-3.5-turbo", 
+                "service": "openai_official"
+            }
+        else:
+            return {
+                "primary": "claude-3-5-sonnet-20241022",
+                "fallback": "claude-3-haiku-20240307",
+                "service": "anthropic_official"
+            }
 
 
 class WorkflowGenerationSystem(MultiAgentOrchestrator):
@@ -254,6 +407,41 @@ class WorkflowGenerationSystem(MultiAgentOrchestrator):
         try:
             logger.info(f"开始生成工作流，用户需求: {user_requirement}")
             
+            # 🔥 首先验证模型可用性
+            logger.info("验证模型可用性...")
+            model_test = await self.llm_client.test_connection_and_model()
+            
+            if not model_test.get("success"):
+                error_msg = f"模型验证失败: {model_test.get('error', '未知错误')}"
+                logger.error(error_msg)
+                
+                # 提供建议的模型
+                recommended = self.llm_client.get_recommended_models()
+                available_models = model_test.get("available_models", [])
+                
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "message": "模型验证失败，请检查模型配置",
+                    "suggestions": {
+                        "recommended_models": recommended,
+                        "available_models": available_models,
+                        "current_config": {
+                            "provider": self.llm_client.config.get("provider"),
+                            "base_url": self.llm_client.config.get("base_url"),
+                            "model_name": self.llm_client.config.get("model_name")
+                        }
+                    }
+                }
+            
+            # 模型验证成功，显示使用的模型信息
+            used_model = model_test.get("model")
+            service_type = model_test.get("service_type")
+            logger.info(f"✅ 模型验证成功 - 使用模型: {used_model} (服务: {service_type})")
+            
+            if model_test.get("note"):
+                logger.info(f"ℹ️  {model_test.get('note')}")
+            
             # 调用父类的生成方法
             result = await self.generate_workflow(user_requirement)
             
@@ -263,14 +451,23 @@ class WorkflowGenerationSystem(MultiAgentOrchestrator):
                     "success": True,
                     "workflow": result["workflow"],
                     "generation_history": result["generation_history"],
-                    "message": "工作流生成成功"
+                    "message": "工作流生成成功",
+                    "model_info": {
+                        "used_model": used_model,
+                        "service_type": service_type,
+                        "note": model_test.get("note")
+                    }
                 }
             else:
                 logger.error(f"工作流生成失败: {result['error']}")
                 return {
                     "success": False,
                     "error": result["error"],
-                    "message": "工作流生成失败"
+                    "message": "工作流生成失败",
+                    "model_info": {
+                        "used_model": used_model,
+                        "service_type": service_type
+                    }
                 }
         
         except Exception as e:

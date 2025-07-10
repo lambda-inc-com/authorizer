@@ -15,6 +15,7 @@ import (
 	"github.com/authorizerdev/authorizer/server/oauth"
 	"github.com/authorizerdev/authorizer/server/refs"
 	"github.com/authorizerdev/authorizer/server/routes"
+	"github.com/authorizerdev/authorizer/server/services"
 	"github.com/sirupsen/logrus"
 )
 
@@ -91,7 +92,14 @@ func main() {
 		log.Errorf("Error while initializing products: %v", err)
 	}
 
-	router := routes.InitRouter(log)
+	// initialize AI gRPC client
+	aiGRPCClient, err := services.NewAIGRPCClient("localhost:50051")
+	if err != nil {
+		log.Errorf("Error while initializing AI gRPC client: %v", err)
+		// 不中断启动，AI服务连接失败不应该影响整个系统
+	}
+
+	router := routes.InitRouter(log, aiGRPCClient)
 	log.Info("Starting Authorizer: ", VERSION)
 	port, err := memorystore.Provider.GetStringStoreEnvVariable(constants.EnvKeyPort)
 	log.Info("Authorizer running at PORT: ", port)

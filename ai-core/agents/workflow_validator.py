@@ -27,7 +27,8 @@ class WorkflowValidator(BaseAgent):
                 "required_node_fields": ["name", "type", "desc", "inputs", "outputs", "configs", "nextNodes"],
                 "valid_node_types": [
                     "workflowStart", "workflowEnd", "dbQuery", "dbCreate", "dbUpdate", 
-                    "dbDelete", "http", "llm", "condition", "code", "transaction"
+                    "dbDelete", "transaction", "batch", "condition", "workflow", 
+                    "http", "llm", "code"
                 ]
             },
             "business_rules": {
@@ -44,42 +45,60 @@ class WorkflowValidator(BaseAgent):
                 },
                 "workflowEnd": {
                     "required_configs": [],
+                    "required_outputs": ["code", "data", "message"],
                     "nextNodes_rules": "must_be_end"
                 },
                 "dbQuery": {
-                    "required_configs": ["table"],
+                    "required_configs": ["table", "sql"],
+                    "required_outputs": ["affected", "data"],
                     "nextNodes_rules": "must_not_be_empty"
                 },
                 "dbCreate": {
-                    "required_configs": ["table", "data"],
+                    "required_configs": ["table", "sql"],
+                    "required_outputs": ["affected", "insertId"],
                     "nextNodes_rules": "must_not_be_empty"
                 },
                 "dbUpdate": {
-                    "required_configs": ["table", "data", "filters"],
+                    "required_configs": ["table", "sql"],
+                    "required_outputs": ["affected"],
                     "nextNodes_rules": "must_not_be_empty"
                 },
                 "dbDelete": {
-                    "required_configs": ["table", "filters"],
-                    "nextNodes_rules": "must_not_be_empty"
-                },
-                "http": {
-                    "required_configs": ["method", "url"],
-                    "nextNodes_rules": "must_not_be_empty"
-                },
-                "llm": {
-                    "required_configs": ["modelId"],
-                    "nextNodes_rules": "must_not_be_empty"
-                },
-                "condition": {
-                    "required_configs": ["conditionGroups"],
-                    "nextNodes_rules": "can_be_empty"
-                },
-                "code": {
-                    "required_configs": ["file"],
+                    "required_configs": ["table", "sql"],
+                    "required_outputs": ["affected"],
                     "nextNodes_rules": "must_not_be_empty"
                 },
                 "transaction": {
                     "required_configs": ["children"],
+                    "required_outputs": ["committed", "affectedTotal", "childResults", "executionTime"],
+                    "nextNodes_rules": "must_not_be_empty"
+                },
+                "batch": {
+                    "required_configs": ["mapConfig", "reduceConfig", "child"],
+                    "required_outputs": ["totalProcessed", "successCount", "failureCount", "aggregatedResult", "executionTime"],
+                    "nextNodes_rules": "must_not_be_empty"
+                },
+                "condition": {
+                    "required_configs": ["conditionGroups"],
+                    "nextNodes_rules": "can_be_empty",
+                    "no_outputs": True
+                },
+                "workflow": {
+                    "required_configs": ["workflowId", "inputMappings", "outputMappings"],
+                    "nextNodes_rules": "must_not_be_empty"
+                },
+                "http": {
+                    "required_configs": ["method", "url"],
+                    "required_outputs": ["code", "data", "message"],
+                    "nextNodes_rules": "must_not_be_empty"
+                },
+                "llm": {
+                    "required_configs": ["modelId"],
+                    "required_outputs": ["thinking", "response", "tokens"],
+                    "nextNodes_rules": "must_not_be_empty"
+                },
+                "code": {
+                    "required_configs": ["file"],
                     "nextNodes_rules": "must_not_be_empty"
                 }
             }
@@ -326,6 +345,62 @@ class WorkflowValidator(BaseAgent):
             "errors": errors,
             "warnings": warnings
         }
+    
+    def _validate_node(self, node: Dict[str, Any]) -> None:
+        """验证单个节点"""
+        # 检查必需字段，但根据节点类型决定是否需要outputs
+        required_fields = ["name", "type", "desc", "inputs", "configs", "nextNodes"]
+        
+        # 检查是否需要outputs字段
+        node_type = node.get("type")
+        rules = self.validation_rules["node_specific_rules"].get(node_type, {})
+        needs_outputs = not rules.get("no_outputs", False)
+        
+        if needs_outputs:
+            required_fields.append("outputs")
+        
+        for field in required_fields:
+            if field not in node:
+                raise ValueError(f"节点 {node.get('name', 'unknown')} 缺少必需字段: {field}")
+        
+        # 验证节点类型
+        if node["type"] not in self.validation_rules["structure_rules"]["valid_node_types"]:
+            raise ValueError(f"不支持的节点类型: {node['type']}")
+        
+        # 验证节点特定配置
+        if node["type"] in self.validation_rules["node_specific_rules"]:
+            rules = self.validation_rules["node_specific_rules"][node["type"]]
+            
+            # 检查必需配置
+            if "required_configs" in rules:
+                for config in rules["required_configs"]:
+                    if config not in node.get("configs", {}):
+                        raise ValueError(f"节点 {node['name']} 缺少必需配置: {config}")
+                    elif not node["configs"][config]:
+                        # 对于某些字段允许为空数组或空对象
+                        if config in ["children", "inputMappings", "outputMappings"] and isinstance(node["configs"][config], (list, dict)):
+                            continue
+                        raise ValueError(f"节点 {node['name']} 的配置 {config} 不能为空")
+            
+            # 检查必需输出字段 (仅对需要outputs的节点)
+            if needs_outputs and "required_outputs" in rules:
+                for output_field in rules["required_outputs"]:
+                    if output_field not in node.get("outputs", {}):
+                        raise ValueError(f"节点 {node['name']} 缺少必需输出字段: {output_field}")
+            
+            # 检查不应该有outputs的节点
+            if rules.get("no_outputs", False) and "outputs" in node:
+                raise ValueError(f"节点 {node['name']} 不应该包含outputs字段")
+            
+            # 检查nextNodes规则
+            if "nextNodes_rules" in rules:
+                nextNodes = node.get("nextNodes", [])
+                rule = rules["nextNodes_rules"]
+                
+                if rule == "must_not_be_empty" and not nextNodes:
+                    raise ValueError(f"节点 {node['name']} 的nextNodes不能为空")
+                elif rule == "must_be_end" and nextNodes != ["end"]:
+                    raise ValueError(f"节点 {node['name']} 的nextNodes必须是['end']")
     
     def _validate_node_configuration(self, node: Dict[str, Any]) -> Tuple[List[str], List[str]]:
         """验证单个节点配置"""

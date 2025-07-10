@@ -1,0 +1,684 @@
+{
+  "name": "Workflow_我想创建一个商品入库流程_1_首先验证供应商信息是否存在_2_检查商品信息如果商品不存在则创建新商品",
+  "description": "根据用户需求自动生成的工作流: \n    我想创建一个商品入库流程：\n    1. 首先验证供应商信息是否存在\n    2. 检查商品信息，如果商品不存在则创建新商品\n    3. 更新库存数量\n    4. 记录库存变动历史\n    5. 如果入库数量超过1000件，需要发送通知给仓库管理员\n    ",
+  "version": "1.0.0",
+  "nodes": [
+    {
+      "name": "startStockIn",
+      "type": "workflowStart",
+      "desc": "商品入库流程启动节点",
+      "inputs": {
+        "supplierId": {
+          "type": "string",
+          "desc": "供应商ID",
+          "required": true
+        },
+        "productId": {
+          "type": "string",
+          "desc": "商品ID",
+          "required": false
+        },
+        "productName": {
+          "type": "string",
+          "desc": "商品名称",
+          "required": true
+        },
+        "productCode": {
+          "type": "string",
+          "desc": "商品编码",
+          "required": true
+        },
+        "quantity": {
+          "type": "number",
+          "desc": "入库数量",
+          "required": true
+        },
+        "unit": {
+          "type": "string",
+          "desc": "商品单位",
+          "required": true
+        },
+        "batchNo": {
+          "type": "string",
+          "desc": "入库批次号",
+          "required": true
+        },
+        "remark": {
+          "type": "string",
+          "desc": "入库备注",
+          "required": false
+        }
+      },
+      "outputs": {},
+      "configs": {},
+      "nextNodes": [
+        "querySupplier"
+      ]
+    },
+    {
+      "name": "querySupplier",
+      "type": "dbQuery",
+      "desc": "查询供应商信息是否存在",
+      "inputs": {
+        "supplierId": {
+          "type": "string",
+          "desc": "供应商ID",
+          "required": true
+        },
+        "supplierCode": {
+          "type": "string",
+          "desc": "供应商编码",
+          "required": true
+        }
+      },
+      "outputs": {
+        "affected": {
+          "type": "number",
+          "desc": "查询返回的行数"
+        },
+        "data": {
+          "type": "array",
+          "desc": "供应商信息数据"
+        }
+      },
+      "configs": {
+        "table": "suppliers",
+        "sql": "SELECT id, supplier_code, supplier_name, contact_person, contact_phone, status FROM suppliers WHERE (id = '$.querySupplier.inputs.supplierId' OR supplier_code = '$.querySupplier.inputs.supplierCode') AND status = 'active' LIMIT 1"
+      },
+      "nextNodes": [
+        "checkSupplierExists"
+      ]
+    },
+    {
+      "name": "checkSupplierExists",
+      "type": "condition",
+      "desc": "验证供应商信息是否存在",
+      "inputs": {
+        "supplierId": {
+          "type": "string",
+          "required": true,
+          "desc": "供应商ID"
+        },
+        "supplierStatus": {
+          "type": "string",
+          "required": true,
+          "desc": "供应商状态"
+        }
+      },
+      "configs": {
+        "conditionGroups": [
+          {
+            "conditions": [
+              {
+                "left": "$.checkSupplierExists.inputs.supplierStatus",
+                "operator": "equal",
+                "right": "active"
+              },
+              {
+                "left": "$.checkSupplierExists.inputs.supplierId",
+                "operator": "isNotNull",
+                "right": null
+              }
+            ],
+            "relationship": "AND",
+            "nextNode": "checkProductExists"
+          },
+          {
+            "conditions": [
+              {
+                "left": "$.checkSupplierExists.inputs.supplierStatus",
+                "operator": "equal",
+                "right": "inactive"
+              }
+            ],
+            "relationship": "AND",
+            "nextNode": "handleInactiveSupplier"
+          }
+        ],
+        "groupRelationship": "OR",
+        "defaultNextNode": "handleInvalidSupplier"
+      },
+      "nextNodes": [
+        "queryProduct"
+      ]
+    },
+    {
+      "name": "queryProduct",
+      "type": "dbQuery",
+      "desc": "查询商品信息",
+      "inputs": {
+        "productCode": {
+          "type": "string",
+          "desc": "商品编码",
+          "required": true
+        },
+        "productName": {
+          "type": "string",
+          "desc": "商品名称"
+        }
+      },
+      "outputs": {
+        "affected": {
+          "type": "number",
+          "desc": "查询结果数量"
+        },
+        "data": {
+          "type": "array",
+          "desc": "商品信息数据"
+        }
+      },
+      "configs": {
+        "table": "products",
+        "sql": "SELECT p.id, p.product_code, p.product_name, p.price, p.stock_quantity, p.created_at, p.updated_at FROM products p WHERE p.product_code = '$.queryProduct.inputs.productCode' OR p.product_name = '$.queryProduct.inputs.productName'"
+      },
+      "nextNodes": [
+        "checkProductExists"
+      ]
+    },
+    {
+      "name": "checkProductExists",
+      "type": "condition",
+      "desc": "检查商品是否存在，决定是否需要创建新商品",
+      "inputs": {
+        "productId": {
+          "type": "string",
+          "desc": "商品ID",
+          "required": true
+        },
+        "productName": {
+          "type": "string",
+          "desc": "商品名称",
+          "required": true
+        }
+      },
+      "configs": {
+        "conditionGroups": [
+          {
+            "conditions": [
+              {
+                "left": "$.checkProductExists.inputs.productId",
+                "operator": "isNotNull",
+                "right": null
+              },
+              {
+                "left": "$.checkProductExists.inputs.productId",
+                "operator": "notEqual",
+                "right": ""
+              }
+            ],
+            "relationship": "AND",
+            "nextNode": "updateInventory"
+          }
+        ],
+        "defaultNextNode": "createProduct"
+      },
+      "nextNodes": [
+        "createProduct"
+      ]
+    },
+    {
+      "name": "createProduct",
+      "type": "dbCreate",
+      "desc": "创建新商品记录",
+      "inputs": {
+        "productCode": {
+          "type": "string",
+          "desc": "商品编码"
+        },
+        "productName": {
+          "type": "string",
+          "desc": "商品名称"
+        },
+        "categoryId": {
+          "type": "string",
+          "desc": "商品分类ID"
+        },
+        "price": {
+          "type": "number",
+          "desc": "商品单价"
+        },
+        "unit": {
+          "type": "string",
+          "desc": "计量单位"
+        },
+        "supplierId": {
+          "type": "string",
+          "desc": "供应商ID"
+        }
+      },
+      "outputs": {
+        "affected": {
+          "type": "number",
+          "desc": "影响的行数"
+        },
+        "insertId": {
+          "type": "string",
+          "desc": "新创建的商品ID"
+        }
+      },
+      "configs": {
+        "table": "products",
+        "sql": "INSERT INTO products (product_code, product_name, category_id, price, unit, supplier_id, created_at) VALUES ($.createProduct.inputs.productCode, $.createProduct.inputs.productName, $.createProduct.inputs.categoryId, $.createProduct.inputs.price, $.createProduct.inputs.unit, $.createProduct.inputs.supplierId, NOW())"
+      },
+      "nextNodes": [
+        "stockUpdateTransaction"
+      ]
+    },
+    {
+      "name": "stockUpdateTransaction",
+      "type": "transaction",
+      "desc": "商品入库事务，包含供应商验证、商品创建、库存更新及历史记录",
+      "inputs": {
+        "supplierId": {
+          "type": "string",
+          "desc": "供应商ID"
+        },
+        "productCode": {
+          "type": "string",
+          "desc": "商品编码"
+        },
+        "quantity": {
+          "type": "number",
+          "desc": "入库数量"
+        },
+        "productInfo": {
+          "type": "object",
+          "desc": "商品信息(新商品时使用)"
+        }
+      },
+      "outputs": {
+        "committed": {
+          "type": "boolean",
+          "desc": "事务是否成功提交"
+        },
+        "affectedTotal": {
+          "type": "number",
+          "desc": "事务影响的总行数"
+        },
+        "childResults": {
+          "type": "array",
+          "desc": "子节点执行结果"
+        },
+        "executionTime": {
+          "type": "number",
+          "desc": "事务执行耗时(毫秒)"
+        }
+      },
+      "configs": {
+        "isolation": "READ_COMMITTED",
+        "timeout": 30,
+        "children": [
+          {
+            "name": "checkSupplier",
+            "type": "dbQuery",
+            "desc": "验证供应商信息",
+            "order": 1,
+            "inputs": {},
+            "outputs": {
+              "exists": {
+                "type": "boolean",
+                "desc": "供应商是否存在"
+              }
+            },
+            "configs": {
+              "table": "suppliers",
+              "conditions": {
+                "id": "$.stockUpdateTransaction.inputs.supplierId",
+                "status": "active"
+              }
+            }
+          },
+          {
+            "name": "createProduct",
+            "type": "dbCreate",
+            "desc": "创建新商品(如不存在)",
+            "order": 2,
+            "inputs": {},
+            "outputs": {
+              "affected": {
+                "type": "number",
+                "desc": "影响行数"
+              },
+              "productId": {
+                "type": "string",
+                "desc": "商品ID"
+              }
+            },
+            "configs": {
+              "table": "products",
+              "data": "$.stockUpdateTransaction.inputs.productInfo",
+              "onDuplicate": "ignore"
+            }
+          },
+          {
+            "name": "updateInventory",
+            "type": "dbUpdate",
+            "desc": "更新库存数量",
+            "order": 3,
+            "inputs": {},
+            "outputs": {
+              "affected": {
+                "type": "number",
+                "desc": "影响行数"
+              }
+            },
+            "configs": {
+              "table": "inventory",
+              "data": {
+                "quantity": {
+                  "increment": "$.stockUpdateTransaction.inputs.quantity"
+                },
+                "last_updated": "${NOW()}"
+              },
+              "conditions": {
+                "product_code": "$.stockUpdateTransaction.inputs.productCode"
+              }
+            }
+          },
+          {
+            "name": "createStockMovement",
+            "type": "dbCreate",
+            "desc": "记录库存变动历史",
+            "order": 4,
+            "inputs": {},
+            "outputs": {
+              "affected": {
+                "type": "number",
+                "desc": "影响行数"
+              },
+              "movementId": {
+                "type": "string",
+                "desc": "变动记录ID"
+              }
+            },
+            "configs": {
+              "table": "stock_movements",
+              "data": {
+                "product_code": "$.stockUpdateTransaction.inputs.productCode",
+                "supplier_id": "$.stockUpdateTransaction.inputs.supplierId",
+                "quantity": "$.stockUpdateTransaction.inputs.quantity",
+                "type": "inbound",
+                "created_at": "${NOW()}"
+              }
+            }
+          }
+        ]
+      },
+      "nextNodes": [
+        "updateInventory"
+      ]
+    },
+    {
+      "name": "updateInventory",
+      "type": "dbUpdate",
+      "desc": "更新商品库存数量",
+      "inputs": {
+        "productId": {
+          "type": "number",
+          "desc": "商品ID",
+          "required": true
+        },
+        "quantity": {
+          "type": "number",
+          "desc": "入库数量",
+          "required": true
+        }
+      },
+      "outputs": {
+        "affected": {
+          "type": "number",
+          "desc": "更新影响的记录数"
+        }
+      },
+      "configs": {
+        "table": "inventory",
+        "sql": "UPDATE inventory SET quantity = quantity + $.updateInventory.inputs.quantity, updated_at = NOW() WHERE product_id = $.updateInventory.inputs.productId"
+      },
+      "nextNodes": [
+        "createStockMovement"
+      ]
+    },
+    {
+      "name": "createStockMovement",
+      "type": "dbCreate",
+      "desc": "创建库存变动记录",
+      "inputs": {
+        "productId": {
+          "type": "string",
+          "desc": "商品ID"
+        },
+        "quantity": {
+          "type": "number",
+          "desc": "变动数量"
+        },
+        "supplierId": {
+          "type": "string",
+          "desc": "供应商ID"
+        },
+        "type": {
+          "type": "string",
+          "desc": "变动类型",
+          "default": "IN"
+        },
+        "operatorId": {
+          "type": "string",
+          "desc": "操作人ID"
+        },
+        "remark": {
+          "type": "string",
+          "desc": "备注信息",
+          "required": false
+        }
+      },
+      "outputs": {
+        "affected": {
+          "type": "number",
+          "desc": "影响的行数"
+        },
+        "insertId": {
+          "type": "string",
+          "desc": "新插入记录的ID"
+        }
+      },
+      "configs": {
+        "table": "stock_movements",
+        "sql": "INSERT INTO stock_movements (product_id, quantity, supplier_id, type, operator_id, remark, created_at) VALUES ($.createStockMovement.inputs.productId, $.createStockMovement.inputs.quantity, $.createStockMovement.inputs.supplierId, $.createStockMovement.inputs.type, $.createStockMovement.inputs.operatorId, $.createStockMovement.inputs.remark, NOW())"
+      },
+      "nextNodes": [
+        "checkLargeQuantity"
+      ]
+    },
+    {
+      "name": "checkLargeQuantity",
+      "type": "condition",
+      "desc": "判断商品入库数量是否超过1000件，决定是否需要通知仓库管理员",
+      "inputs": {
+        "quantity": {
+          "type": "number",
+          "desc": "入库数量",
+          "required": true
+        }
+      },
+      "configs": {
+        "conditionGroups": [
+          {
+            "conditions": [
+              {
+                "left": "$.checkLargeQuantity.inputs.quantity",
+                "operator": "greaterThan",
+                "right": 1000
+              }
+            ],
+            "relationship": "AND",
+            "nextNode": "notifyWarehouseManager"
+          }
+        ],
+        "defaultNextNode": "recordStockMovement"
+      },
+      "nextNodes": [
+        "sendNotification"
+      ]
+    },
+    {
+      "name": "sendNotification",
+      "type": "http",
+      "desc": "当入库数量超过1000时发送通知给仓库管理员",
+      "inputs": {
+        "adminId": {
+          "type": "string",
+          "desc": "仓库管理员ID"
+        },
+        "productName": {
+          "type": "string",
+          "desc": "商品名称"
+        },
+        "quantity": {
+          "type": "number",
+          "desc": "入库数量"
+        },
+        "supplierName": {
+          "type": "string",
+          "desc": "供应商名称"
+        }
+      },
+      "outputs": {
+        "code": {
+          "type": "number",
+          "desc": "HTTP状态码"
+        },
+        "data": {
+          "type": "object",
+          "desc": "响应数据"
+        }
+      },
+      "configs": {
+        "method": "POST",
+        "url": "https://api.warehouse.com/notifications",
+        "timeout": 30,
+        "headers": {
+          "Content-Type": "application/json",
+          "X-API-Key": "${env.API_KEY}"
+        },
+        "bodyType": "json",
+        "body": {
+          "type": "LARGE_INVENTORY_ALERT",
+          "recipientId": "$.sendNotification.inputs.adminId",
+          "message": "大量商品入库提醒：供应商 ${$.sendNotification.inputs.supplierName} 的 ${$.sendNotification.inputs.productName} 商品入库数量为 ${$.sendNotification.inputs.quantity} 件，请及时处理。",
+          "metadata": {
+            "productName": "$.sendNotification.inputs.productName",
+            "quantity": "$.sendNotification.inputs.quantity",
+            "supplierName": "$.sendNotification.inputs.supplierName",
+            "timestamp": "${datetime.now}"
+          }
+        }
+      },
+      "nextNodes": [
+        "endStockIn"
+      ]
+    },
+    {
+      "name": "endStockIn",
+      "type": "workflowEnd",
+      "desc": "商品入库流程结束节点",
+      "inputs": {
+        "stockInResult": {
+          "type": "object",
+          "desc": "入库操作结果"
+        }
+      },
+      "outputs": {
+        "code": {
+          "type": "number",
+          "value": "200",
+          "desc": "HTTP状态码"
+        },
+        "data": {
+          "type": "object",
+          "desc": "入库结果数据",
+          "properties": {
+            "productId": {
+              "type": "string",
+              "value": "$.CheckProduct.outputs.productId",
+              "desc": "商品ID"
+            },
+            "quantity": {
+              "type": "number",
+              "value": "$.UpdateInventory.outputs.quantity",
+              "desc": "入库数量"
+            },
+            "stockMovementId": {
+              "type": "string",
+              "value": "$.RecordMovement.outputs.movementId",
+              "desc": "库存变动记录ID"
+            },
+            "notificationSent": {
+              "type": "boolean",
+              "value": "$.SendNotification.outputs.sent",
+              "desc": "是否已发送通知"
+            },
+            "timestamp": {
+              "type": "string",
+              "value": "$.RecordMovement.outputs.createdAt",
+              "desc": "入库时间"
+            }
+          }
+        },
+        "message": {
+          "type": "string",
+          "value": "商品入库成功",
+          "desc": "响应消息"
+        }
+      },
+      "configs": {},
+      "nextNodes": [
+        "end"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "startStockIn",
+      "target": "querySupplier"
+    },
+    {
+      "source": "querySupplier",
+      "target": "checkSupplierExists"
+    },
+    {
+      "source": "checkSupplierExists",
+      "target": "queryProduct"
+    },
+    {
+      "source": "queryProduct",
+      "target": "checkProductExists"
+    },
+    {
+      "source": "checkProductExists",
+      "target": "createProduct"
+    },
+    {
+      "source": "createProduct",
+      "target": "stockUpdateTransaction"
+    },
+    {
+      "source": "stockUpdateTransaction",
+      "target": "updateInventory"
+    },
+    {
+      "source": "updateInventory",
+      "target": "createStockMovement"
+    },
+    {
+      "source": "createStockMovement",
+      "target": "checkLargeQuantity"
+    },
+    {
+      "source": "checkLargeQuantity",
+      "target": "sendNotification"
+    },
+    {
+      "source": "sendNotification",
+      "target": "endStockIn"
+    }
+  ]
+}

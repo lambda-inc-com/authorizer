@@ -55,6 +55,7 @@ class SharedContext:
     """共享上下文"""
     user_requirement: str = ""
     analyzed_nodes: List[Dict[str, Any]] = field(default_factory=list)
+    node_generation_prompts: List[Dict[str, Any]] = field(default_factory=list)
     composed_workflow: Dict[str, Any] = field(default_factory=dict)
     validation_errors: List[str] = field(default_factory=list)
     retry_count: int = 0
@@ -130,6 +131,7 @@ class BaseAgent(ABC):
         self.message_bus = message_bus
         self.state_manager = state_manager
         self.is_busy = False
+        self.last_task_success = True  # 跟踪最后一个任务的成功状态
         
         # 订阅消息
         self.message_bus.subscribe(self.role, self._handle_message)
@@ -152,9 +154,13 @@ class BaseAgent(ABC):
         """执行任务"""
         try:
             self.is_busy = True
+            self.last_task_success = False  # 默认为失败，成功完成后设置为True
             logger.info(f"{self.role.value} 开始执行任务")
             
             result = await self.process_task(task_data)
+            
+            # 任务成功完成
+            self.last_task_success = True
             
             # 发送完成消息
             await self.message_bus.publish(AgentMessage(
@@ -167,6 +173,7 @@ class BaseAgent(ABC):
             logger.info(f"{self.role.value} 任务完成")
             
         except Exception as e:
+            self.last_task_success = False
             logger.error(f"{self.role.value} 任务失败: {str(e)}")
             await self.message_bus.publish(AgentMessage(
                 sender=self.role,
@@ -214,11 +221,29 @@ class MultiAgentOrchestrator:
             
             # 阶段1: 需求分析
             logger.info("阶段1: 需求分析")
-            await self._execute_requirement_analysis()
+            stage1_success = await self._execute_requirement_analysis()
+            
+            # 🔥 如果第一阶段失败，停止整个流程
+            if not stage1_success:
+                context = await self.state_manager.get_context()
+                return {
+                    "success": False,
+                    "error": "需求分析阶段失败，无法继续生成工作流",
+                    "generation_history": context.generation_history
+                }
             
             # 阶段2: 工作流组合
             logger.info("阶段2: 工作流组合")
-            await self._execute_workflow_composition()
+            stage2_success = await self._execute_workflow_composition()
+            
+            # 如果第二阶段失败，也停止流程
+            if not stage2_success:
+                context = await self.state_manager.get_context()
+                return {
+                    "success": False,
+                    "error": "工作流组合阶段失败",
+                    "generation_history": context.generation_history
+                }
             
             # 阶段3: 工作流验证
             logger.info("阶段3: 工作流验证")
@@ -237,34 +262,46 @@ class MultiAgentOrchestrator:
             
         except Exception as e:
             logger.error(f"工作流生成失败: {str(e)}")
+            context = await self.state_manager.get_context()
             return {
                 "success": False,
-                "error": str(e)
+                "error": str(e),
+                "generation_history": getattr(context, 'generation_history', [])
             }
     
-    async def _execute_requirement_analysis(self):
+    async def _execute_requirement_analysis(self) -> bool:
         """执行需求分析"""
-        await self.message_bus.publish(AgentMessage(
-            sender=AgentRole.REQUIREMENT_ANALYZER,
-            receiver=AgentRole.REQUIREMENT_ANALYZER,
-            message_type=MessageType.TASK_START,
-            content={}
-        ))
-        
-        # 等待任务完成
-        await self._wait_for_task_completion(AgentRole.REQUIREMENT_ANALYZER)
+        try:
+            await self.message_bus.publish(AgentMessage(
+                sender=AgentRole.REQUIREMENT_ANALYZER,
+                receiver=AgentRole.REQUIREMENT_ANALYZER,
+                message_type=MessageType.TASK_START,
+                content={}
+            ))
+            
+            # 等待任务完成
+            success = await self._wait_for_task_completion(AgentRole.REQUIREMENT_ANALYZER)
+            return success
+        except Exception as e:
+            logger.error(f"需求分析阶段异常: {str(e)}")
+            return False
     
-    async def _execute_workflow_composition(self):
+    async def _execute_workflow_composition(self) -> bool:
         """执行工作流组合"""
-        await self.message_bus.publish(AgentMessage(
-            sender=AgentRole.WORKFLOW_COMPOSER,
-            receiver=AgentRole.WORKFLOW_COMPOSER,
-            message_type=MessageType.TASK_START,
-            content={}
-        ))
-        
-        # 等待任务完成
-        await self._wait_for_task_completion(AgentRole.WORKFLOW_COMPOSER)
+        try:
+            await self.message_bus.publish(AgentMessage(
+                sender=AgentRole.WORKFLOW_COMPOSER,
+                receiver=AgentRole.WORKFLOW_COMPOSER,
+                message_type=MessageType.TASK_START,
+                content={}
+            ))
+            
+            # 等待任务完成
+            success = await self._wait_for_task_completion(AgentRole.WORKFLOW_COMPOSER)
+            return success
+        except Exception as e:
+            logger.error(f"工作流组合阶段异常: {str(e)}")
+            return False
     
     async def _execute_workflow_validation(self) -> Dict[str, Any]:
         """执行工作流验证"""
@@ -284,11 +321,28 @@ class MultiAgentOrchestrator:
             "errors": context.validation_errors
         }
     
-    async def _wait_for_task_completion(self, agent_role: AgentRole):
-        """等待任务完成"""
-        # 简单的等待机制，实际实现中可能需要更复杂的逻辑
+    async def _wait_for_task_completion(self, agent_role: AgentRole) -> bool:
+        """等待任务完成并返回成功状态"""
+        # 等待智能体完成任务
+        timeout = 120  # 2分钟超时
+        start_time = asyncio.get_event_loop().time()
+        
         while self.agents[agent_role].is_busy:
+            # 检查超时
+            if asyncio.get_event_loop().time() - start_time > timeout:
+                logger.error(f"{agent_role.value} 任务超时")
+                return False
+                
             await asyncio.sleep(0.1)
+        
+        # 检查任务是否成功完成
+        # 我们需要在智能体中设置一个状态来跟踪最后的任务结果
+        agent = self.agents[agent_role]
+        if hasattr(agent, 'last_task_success'):
+            return agent.last_task_success
+        
+        # 如果没有明确的失败信息，假设成功
+        return True
     
     async def _handle_validation_failure(self, validation_result: Dict[str, Any]):
         """处理验证失败"""

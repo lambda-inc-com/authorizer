@@ -1,0 +1,47 @@
+{
+  "name": "Workflow_创建一个简单的用户登录验证流程查询用户信息并验证密码",
+  "description": "根据用户需求自动生成的工作流: 创建一个简单的用户登录验证流程，查询用户信息并验证密码",
+  "version": "1.0.0",
+  "nodes": [
+    {
+      "name": "WorkflowStart",
+      "type": "workflowStart",
+      "desc": "工作流开始节点",
+      "inputs": {
+        "parameters": {
+          "type": "object",
+          "value": {},
+          "desc": "工作流输入参数"
+        }
+      },
+      "outputs": {},
+      "configs": {},
+      "nextNodes": [
+        "WorkflowEnd"
+      ]
+    },
+    {
+      "name": "WorkflowEnd",
+      "type": "workflowEnd",
+      "desc": "工作流结束节点",
+      "inputs": {
+        "finalResult": {
+          "type": "object",
+          "value": "$prevNode.outputs.result",
+          "desc": "最终结果"
+        }
+      },
+      "outputs": {},
+      "configs": {},
+      "nextNodes": [
+        "end"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "source": "WorkflowStart",
+      "target": "WorkflowEnd"
+    }
+  ]
+}

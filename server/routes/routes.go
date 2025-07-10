@@ -6,10 +6,11 @@ import (
 
 	"github.com/authorizerdev/authorizer/server/handlers"
 	"github.com/authorizerdev/authorizer/server/middlewares"
+	"github.com/authorizerdev/authorizer/server/services"
 )
 
 // InitRouter initializes gin router
-func InitRouter(log *logrus.Logger) *gin.Engine {
+func InitRouter(log *logrus.Logger, aiGRPCClient *services.AIGRPCClient) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 
@@ -39,8 +40,8 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 	// login page app related routes.
 	app := router.Group("/app")
 	{
-		app.Static("/favicon_io", "/app/favicon_io")
-		app.Static("/build", "/app/build")
+		app.Static("/favicon_io", "../app/favicon_io")
+		app.Static("/build", "../app/build")
 		app.GET("/", handlers.AppHandler())
 		app.GET("/:page", handlers.AppHandler())
 	}
@@ -48,9 +49,9 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 	// dashboard related routes
 	dashboard := router.Group("/dashboard")
 	{
-		dashboard.Static("/favicon_io", "/dashboard/favicon_io")
-		dashboard.Static("/build", "/dashboard/build")
-		dashboard.Static("/public", "/dashboard/public")
+		dashboard.Static("/favicon_io", "../dashboard/favicon_io")
+		dashboard.Static("/build", "../dashboard/build")
+		dashboard.Static("/public", "../dashboard/public")
 		dashboard.GET("/", handlers.DashboardHandler())
 		dashboard.GET("/:page", handlers.DashboardHandler())
 	}
@@ -114,6 +115,23 @@ func InitRouter(log *logrus.Logger) *gin.Engine {
 		llm.PUT("/user-configs/:config_id", handlers.UpdateUserLLMConfigHandler())
 		llm.DELETE("/user-configs/:config_id", handlers.DeleteUserLLMConfigHandler())
 		llm.POST("/user-configs/:config_id/set-default", handlers.SetDefaultUserLLMConfigHandler())
+	}
+
+	// AI流式处理路由
+	if aiGRPCClient != nil {
+		aiStreamHandler := handlers.NewAIStreamHandler(aiGRPCClient)
+
+		ai := router.Group("/ai")
+		{
+			// 健康检查（无需认证）
+			ai.GET("/health", aiStreamHandler.HealthCheckHandler())
+
+			// 需要认证的接口
+			ai.Use(middlewares.AuthMiddleware())
+			ai.POST("/stream/chat", aiStreamHandler.StreamChatHandler())
+			ai.POST("/stream/workflow/generate", aiStreamHandler.StreamWorkflowGenerateHandler())
+			ai.GET("/stream/chat/ws", aiStreamHandler.WebSocketChatHandler()) // WebSocket版本（可选）
+		}
 	}
 
 	return router
