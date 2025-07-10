@@ -4,6 +4,8 @@ services:
     build: .
     ports:
       - 19898:8080
+    volumes:
+      - ./server/configs/llm:/authorizer/configs/llm:ro
     env_file:
       - .env
     depends_on:
@@ -24,17 +26,15 @@ services:
     networks:
       - app-network
 
-  nginx:
-    image: nginx:alpine
+  redis:
+    image: redis:latest
+    command: redis-server --requirepass QpdUm3KNMXwya8Mjiuxiang
     ports:
-      - 19899:80
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d
-      - ./nginx/html:/usr/share/nginx/html
-    depends_on:
-      - authorizer
+      - "6379:6379"
     networks:
       - app-network
+    volumes:
+      - ../redis-data:/data
 
 networks:
   app-network:

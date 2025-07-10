@@ -55,7 +55,7 @@ import (
 const (
 	authorizeWebMessageTemplate = "authorize_web_message.tmpl"
 	authorizeFormPostTemplate   = "authorize_form_post.tmpl"
-	baseAppPath                 = "/app"
+	baseAppPath                 = "/myAuthorizer/app"
 	signupPath                  = "/app/signup"
 )
 
@@ -68,6 +68,8 @@ const (
 // code_challenge_method = to prevent CSRF attack [only sh256 is supported]
 func AuthorizeHandler() gin.HandlerFunc {
 	return func(gc *gin.Context) {
+		log.Println("++++++++++++++++66666")
+		log.Println("++++++++++++++++++++++++")
 		redirectURI := strings.TrimSpace(gc.Query("redirect_uri"))
 		responseType := strings.TrimSpace(gc.Query("response_type"))
 		state := strings.TrimSpace(gc.Query("state"))

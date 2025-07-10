@@ -7,6 +7,7 @@ import (
 
 	"github.com/authorizerdev/authorizer/server/db"
 	"github.com/authorizerdev/authorizer/server/db/models"
+	"github.com/authorizerdev/authorizer/server/services"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -104,11 +105,23 @@ func GetUserPoints(c *gin.Context) {
 	userID := c.GetString("user_id")
 	ctx := context.Background()
 
+	// 获取用户积分
 	userPoints, err := db.Provider.GetOrCreateUserPoints(ctx, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取用户积分失败"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"user_points": userPoints})
+	// 获取用户订阅信息
+	subscriptionService := services.NewSubscriptionService()
+	subscription, err := subscriptionService.CheckUserSubscription(ctx, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取用户订阅信息失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"user_points":  userPoints,
+		"subscription": subscription,
+	})
 }
