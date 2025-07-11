@@ -70,9 +70,12 @@ class LLMClient:
             
             # 检查是否是代理服务，如果是则使用 OpenAI 客户端
             if "gptsapi.net" in base_url:
+                # 检查base_url是否已经包含/v1后缀，避免重复添加
+                if not base_url.endswith("/v1"):
+                    base_url = base_url + "/v1"
                 return openai.OpenAI(
                     api_key=self.config["api_key"],
-                    base_url=base_url + "/v1"
+                    base_url=base_url
                 )
             else:
                 return anthropic.Anthropic(
