@@ -190,7 +190,7 @@ func (h *AIStreamHandler) StreamChatHandler() gin.HandlerFunc {
 		responseChan := make(chan *services.StreamChatResponse)
 
 		// 启动gRPC流式调用
-		streamCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		streamCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		defer cancel()
 
 		err = h.grpcClient.StreamChat(streamCtx, userID, request.Model, request.Messages, responseChan)

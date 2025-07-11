@@ -10,6 +10,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 )
 
 // AIGRPCClient AI gRPC客户端
@@ -20,8 +21,22 @@ type AIGRPCClient struct {
 
 // NewAIGRPCClient 创建AI gRPC客户端
 func NewAIGRPCClient(address string) (*AIGRPCClient, error) {
+	// 配置gRPC连接选项
+	opts := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second, // 30秒发送一次keepalive
+			Timeout:             5 * time.Second,  // 5秒keepalive超时
+			PermitWithoutStream: true,             // 允许没有流时发送keepalive
+		}),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(100*1024*1024), // 100MB接收限制
+			grpc.MaxCallSendMsgSize(100*1024*1024), // 100MB发送限制
+		),
+	}
+
 	// 建立gRPC连接
-	conn, err := grpc.Dial(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial(address, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("连接AI gRPC服务失败: %w", err)
 	}
@@ -192,7 +207,7 @@ func (c *AIGRPCClient) StreamWorkflowGenerate(ctx context.Context, userID string
 // HealthCheck 健康检查
 func (c *AIGRPCClient) HealthCheck(ctx context.Context) error {
 	// 设置超时
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	// 简单的连接测试
