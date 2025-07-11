@@ -1,0 +1,100 @@
+# 多服务整合Dockerfile
+# Stage 1: Go服务构建
+FROM golang:1.21.3-alpine3.18 as go-builder
+WORKDIR /authorizer
+COPY server server
+COPY Makefile .
+
+ARG VERSION="latest"
+ENV VERSION="$VERSION"
+ENV GOPROXY=https://goproxy.cn,direct
+ENV GOSUMDB=sum.golang.google.cn
+ENV GO111MODULE=on
+
+RUN echo "$VERSION"
+RUN apk add build-base &&\
+    make clean && make && \
+    chmod 777 build/server
+
+# Stage 2: Node.js前端构建
+FROM node:20-alpine3.18 as node-builder
+WORKDIR /authorizer
+COPY app app
+COPY dashboard dashboard
+COPY Makefile .
+
+RUN npm config set registry https://registry.npmmirror.com
+RUN apk add build-base &&\
+    make build-app && \
+    make build-dashboard
+
+# Stage 3: Python AI服务构建
+FROM python:3.11-alpine3.18 as python-builder
+WORKDIR /ai-core
+COPY ai-core/ .
+
+# 安装Python依赖
+RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.douban.com/simple/
+
+# Stage 4: 最终运行环境
+FROM python:3.11-alpine3.18
+
+# 安装supervisor用于管理多个进程
+RUN apk add --no-cache supervisor
+
+# 创建用户
+RUN adduser -D -h /authorizer -u 1000 -k /dev/null authorizer
+
+# 设置工作目录
+WORKDIR /authorizer
+
+# 创建必要目录
+RUN mkdir -p app dashboard ai-core /var/log/supervisor
+
+# 复制Go服务
+COPY --from=go-builder --chown=authorizer:authorizer /authorizer/build build
+
+# 复制前端资源
+COPY --from=node-builder --chown=authorizer:authorizer /authorizer/app/build app/build
+COPY --from=node-builder --chown=authorizer:authorizer /authorizer/app/favicon_io app/favicon_io
+COPY --from=node-builder --chown=authorizer:authorizer /authorizer/dashboard/build dashboard/build
+COPY --from=node-builder --chown=authorizer:authorizer /authorizer/dashboard/favicon_io dashboard/favicon_io
+
+# 复制Python AI服务
+COPY --from=python-builder --chown=authorizer:authorizer /ai-core ai-core
+COPY --from=python-builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=python-builder /usr/local/bin /usr/local/bin
+
+# 复制模板和配置
+COPY templates templates
+
+# 创建supervisor配置
+COPY <<EOF /etc/supervisor/conf.d/supervisord.conf
+[supervisord]
+nodaemon=true
+user=root
+
+[program:go-server]
+command=/authorizer/build/server
+directory=/authorizer
+user=authorizer
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/supervisor/go-server.log
+stderr_logfile=/var/log/supervisor/go-server-error.log
+
+[program:python-ai]
+command=python grpc_server.py
+directory=/authorizer/ai-core
+user=authorizer
+autostart=true
+autorestart=true
+stdout_logfile=/var/log/supervisor/python-ai.log
+stderr_logfile=/var/log/supervisor/python-ai-error.log
+EOF
+
+# 暴露端口
+EXPOSE 8080 50051
+
+# 启动supervisor
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"] 
