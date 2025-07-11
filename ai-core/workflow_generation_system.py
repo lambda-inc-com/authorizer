@@ -122,6 +122,36 @@ class LLMClient:
             logger.error(f"LLM调用失败: {str(e)}")
             raise
     
+    async def stream_chat_completion(self, messages: list, model: str = None, **kwargs):
+        """
+        LLM流式聊天完成接口 - 真正的流式响应
+        """
+        if not self.client:
+            raise RuntimeError("LLM客户端未初始化，请检查API密钥配置")
+        
+        try:
+            # 使用配置中的模型名称
+            model_name = model or self.config.get("model_name", "claude-3-sonnet-20240229")
+            max_tokens = kwargs.get("max_tokens", self.config.get("max_tokens", 4096))
+            temperature = kwargs.get("temperature", 0.3)
+            
+            provider = self.config.get("provider", "").lower()
+            
+            if provider == "anthropic":
+                # Claude API流式调用
+                async for chunk in self._stream_claude_api(messages, model_name, max_tokens, temperature):
+                    yield chunk
+            elif provider == "openai":
+                # OpenAI API流式调用
+                async for chunk in self._stream_openai_api(messages, model_name, max_tokens, temperature):
+                    yield chunk
+            else:
+                raise ValueError(f"不支持的提供商: {provider}")
+                
+        except Exception as e:
+            logger.error(f"LLM流式调用失败: {str(e)}")
+            raise
+    
     async def _call_claude_api(self, messages: list, model: str, max_tokens: int, temperature: float) -> str:
         """调用Claude API - 兼容代理服务"""
         try:
@@ -219,6 +249,172 @@ class LLMClient:
             
         except Exception as e:
             logger.error(f"OpenAI API调用失败: {str(e)}")
+            raise
+    
+    async def _stream_claude_api(self, messages: list, model: str, max_tokens: int, temperature: float):
+        """流式调用Claude API"""
+        try:
+            # 检查是否是代理服务（gptsapi.net）
+            if "gptsapi.net" in self.config.get("base_url", ""):
+                # 使用 OpenAI 兼容格式的流式调用
+                async for chunk in self._stream_openai_compatible_api(messages, model, max_tokens, temperature):
+                    yield chunk
+            else:
+                # 使用标准 Claude API 格式的流式调用
+                async for chunk in self._stream_standard_claude_api(messages, model, max_tokens, temperature):
+                    yield chunk
+                    
+        except Exception as e:
+            logger.error(f"Claude 流式API调用失败: {str(e)}")
+            raise
+    
+    async def _stream_standard_claude_api(self, messages: list, model: str, max_tokens: int, temperature: float):
+        """流式调用标准Claude API"""
+        # 转换消息格式
+        claude_messages = []
+        system_message = ""
+        
+        for msg in messages:
+            if msg["role"] == "system":
+                system_message = msg["content"]
+            else:
+                claude_messages.append({
+                    "role": msg["role"],
+                    "content": msg["content"]
+                })
+        
+        # 创建流式请求
+        def create_stream():
+            return self.client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system_message,
+                messages=claude_messages,
+                stream=True  # 启用流式响应
+            )
+        
+        # 在executor中运行流式调用
+        stream = await asyncio.get_event_loop().run_in_executor(None, create_stream)
+        
+        # 处理流式响应
+        for event in stream:
+            if hasattr(event, 'delta') and hasattr(event.delta, 'text'):
+                content = event.delta.text
+                if content:
+                    yield {
+                        "content": content,
+                        "is_complete": False,
+                        "finish_reason": "",
+                        "model_used": model
+                    }
+            elif hasattr(event, 'type') and event.type == 'message_stop':
+                # 流式响应结束
+                yield {
+                    "content": "",
+                    "is_complete": True,
+                    "finish_reason": "stop",
+                    "model_used": model
+                }
+                break
+    
+    async def _stream_openai_compatible_api(self, messages: list, model: str, max_tokens: int, temperature: float):
+        """流式调用OpenAI兼容的API（用于代理服务）"""
+        # 处理 system 消息 - 合并到第一个 user 消息中
+        processed_messages = []
+        system_content = ""
+        
+        for msg in messages:
+            if msg["role"] == "system":
+                system_content = msg["content"]
+            else:
+                processed_messages.append(msg)
+        
+        # 如果有 system 消息，合并到第一个 user 消息中
+        if system_content and processed_messages:
+            first_user_msg = processed_messages[0]
+            if first_user_msg["role"] == "user":
+                first_user_msg["content"] = f"{system_content}\n\n{first_user_msg['content']}"
+        
+        # 如果没有 user 消息，创建一个
+        if not processed_messages:
+            processed_messages = [{"role": "user", "content": system_content or "Hello"}]
+        
+        # 创建流式请求
+        def create_stream():
+            return self.client.chat.completions.create(
+                model=model,
+                messages=processed_messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stream=True  # 启用流式响应
+            )
+        
+        # 在executor中运行流式调用
+        stream = await asyncio.get_event_loop().run_in_executor(None, create_stream)
+        
+        # 处理流式响应
+        for chunk in stream:
+            if chunk.choices and len(chunk.choices) > 0:
+                choice = chunk.choices[0]
+                if hasattr(choice, 'delta') and hasattr(choice.delta, 'content') and choice.delta.content:
+                    content = choice.delta.content
+                    yield {
+                        "content": content,
+                        "is_complete": False,
+                        "finish_reason": "",
+                        "model_used": model
+                    }
+                elif hasattr(choice, 'finish_reason') and choice.finish_reason:
+                    # 流式响应结束
+                    yield {
+                        "content": "",
+                        "is_complete": True,
+                        "finish_reason": choice.finish_reason,
+                        "model_used": model
+                    }
+                    break
+    
+    async def _stream_openai_api(self, messages: list, model: str, max_tokens: int, temperature: float):
+        """流式调用OpenAI API"""
+        try:
+            # 创建流式请求
+            def create_stream():
+                return self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    stream=True  # 启用流式响应
+                )
+            
+            # 在executor中运行流式调用
+            stream = await asyncio.get_event_loop().run_in_executor(None, create_stream)
+            
+            # 处理流式响应
+            for chunk in stream:
+                if chunk.choices and len(chunk.choices) > 0:
+                    choice = chunk.choices[0]
+                    if hasattr(choice, 'delta') and hasattr(choice.delta, 'content') and choice.delta.content:
+                        content = choice.delta.content
+                        yield {
+                            "content": content,
+                            "is_complete": False,
+                            "finish_reason": "",
+                            "model_used": model
+                        }
+                    elif hasattr(choice, 'finish_reason') and choice.finish_reason:
+                        # 流式响应结束
+                        yield {
+                            "content": "",
+                            "is_complete": True,
+                            "finish_reason": choice.finish_reason,
+                            "model_used": model
+                        }
+                        break
+                        
+        except Exception as e:
+            logger.error(f"OpenAI 流式API调用失败: {str(e)}")
             raise
     
     def _get_available_models(self) -> Dict[str, List[str]]:

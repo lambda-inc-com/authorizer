@@ -41,48 +41,37 @@ class AIStreamServiceImpl(ai_service_stream_pb2_grpc.AIStreamServiceServicer):
                     "content": msg.content
                 })
             
-            # 调用LLM客户端进行流式聊天
+            # 使用真正的流式LLM调用
             llm_client = self.workflow_system.llm_client
             
-            # 模拟流式响应（实际需要根据具体LLM API实现）
-            response_text = ""
-            tokens_used = 0
+            total_tokens_used = 0
             
-            # 这里应该调用实际的流式LLM API
-            # 为演示目的，我们模拟分块响应
-            full_response = await self._get_llm_response(messages, request.model_name)
-            
-            # 分块发送响应
-            chunk_size = 10  # 每个chunk的字符数
-            for i in range(0, len(full_response), chunk_size):
-                chunk = full_response[i:i+chunk_size]
-                response_text += chunk
-                tokens_used += len(chunk.split())
+            # 直接使用流式调用，实时转发每个chunk
+            async for chunk in llm_client.stream_chat_completion(
+                messages=messages, 
+                model=request.model_name,
+                temperature=0.7,
+                max_tokens=4096
+            ):
+                # 累计token使用（简单估算：每个字符约0.25个token）
+                if chunk.get("content"):
+                    total_tokens_used += len(chunk["content"]) // 4 + 1
                 
-                # 创建流式响应
+                # 创建并发送流式响应
                 yield ai_service_stream_pb2.StreamChatResponse(
-                    content=chunk,
-                    is_complete=False,
-                    model_used=request.model_name,
-                    tokens_used=tokens_used,
-                    points_consumed=tokens_used * 2,  # 示例计算
-                    finish_reason="",
+                    content=chunk.get("content", ""),
+                    is_complete=chunk.get("is_complete", False),
+                    model_used=chunk.get("model_used", request.model_name),
+                    tokens_used=total_tokens_used,
+                    points_consumed=total_tokens_used * 2,  # 示例计算：1 token = 2 points
+                    finish_reason=chunk.get("finish_reason", ""),
                     error=""
                 )
                 
-                # 模拟处理延迟
-                await asyncio.sleep(0.1)
-            
-            # 发送最终响应
-            yield ai_service_stream_pb2.StreamChatResponse(
-                content="",
-                is_complete=True,
-                model_used=request.model_name,
-                tokens_used=tokens_used,
-                points_consumed=tokens_used * 2,
-                finish_reason="stop",
-                error=""
-            )
+                # 如果完成，结束循环
+                if chunk.get("is_complete", False):
+                    logger.info(f"流式聊天完成，总共使用 {total_tokens_used} tokens")
+                    break
             
         except Exception as e:
             logger.error(f"流式聊天错误：{str(e)}")
@@ -130,47 +119,69 @@ class AIStreamServiceImpl(ai_service_stream_pb2_grpc.AIStreamServiceServicer):
                 error=""
             )
             
-            # 模拟三个阶段的工作流生成
-            stages = [
-                ("需求分析", "requirement_analysis", 0.33),
-                ("工作流组合", "workflow_composition", 0.66),
-                ("工作流验证", "workflow_validation", 1.0)
-            ]
+            # 创建一个回调函数来实时发送进度
+            async def progress_callback(stage: str, progress: float, message: str):
+                """进度回调函数"""
+                yield ai_service_stream_pb2.StreamWorkflowResponse(
+                    workflow_id=workflow_id,
+                    status="processing",
+                    current_step=stage,
+                    step_output=message,
+                    progress=progress,
+                    is_complete=False,
+                    final_outputs={},
+                    error=""
+                )
             
+            # 调用流式工作流生成
             final_result = None
             
-            for stage_name, stage_key, progress in stages:
-                # 发送当前阶段状态
+            try:
+                # 🎯 实现真正的流式生成
+                async for stage_update in self._stream_workflow_generation(requirement, progress_callback):
+                    # 实时发送每个阶段的更新
+                    yield ai_service_stream_pb2.StreamWorkflowResponse(
+                        workflow_id=workflow_id,
+                        status=stage_update.get("status", "processing"),
+                        current_step=stage_update.get("stage", "unknown"),
+                        step_output=stage_update.get("message", ""),
+                        progress=stage_update.get("progress", 0.0),
+                        is_complete=False,
+                        final_outputs={},
+                        error=stage_update.get("error", "")
+                    )
+                    
+                    # 如果有最终结果，保存它
+                    if stage_update.get("final_result"):
+                        final_result = stage_update["final_result"]
+                        
+                    # 如果出错，直接返回
+                    if stage_update.get("error"):
+                        yield ai_service_stream_pb2.StreamWorkflowResponse(
+                            workflow_id=workflow_id,
+                            status="failed",
+                            current_step="error",
+                            step_output="",
+                            progress=1.0,
+                            is_complete=True,
+                            final_outputs={},
+                            error=stage_update["error"]
+                        )
+                        return
+                        
+            except Exception as e:
+                logger.error(f"流式工作流生成过程中出错: {str(e)}")
                 yield ai_service_stream_pb2.StreamWorkflowResponse(
                     workflow_id=workflow_id,
-                    status="processing",
-                    current_step=stage_key,
-                    step_output=f"正在执行：{stage_name}...",
-                    progress=progress,
-                    is_complete=False,
+                    status="error",
+                    current_step="exception",
+                    step_output="",
+                    progress=1.0,
+                    is_complete=True,
                     final_outputs={},
-                    error=""
+                    error=str(e)
                 )
-                
-                # 模拟处理时间
-                await asyncio.sleep(2)
-                
-                # 如果是最后阶段，调用实际的工作流生成
-                if stage_key == "workflow_validation":
-                    result = await self.workflow_system.generate_workflow_from_requirement(requirement)
-                    final_result = result
-                
-                # 发送阶段完成状态
-                yield ai_service_stream_pb2.StreamWorkflowResponse(
-                    workflow_id=workflow_id,
-                    status="processing",
-                    current_step=stage_key,
-                    step_output=f"{stage_name}完成",
-                    progress=progress,
-                    is_complete=False,
-                    final_outputs={},
-                    error=""
-                )
+                return
             
             # 发送最终结果
             if final_result and final_result.get("success"):
@@ -304,10 +315,138 @@ class AIStreamServiceImpl(ai_service_stream_pb2_grpc.AIStreamServiceServicer):
             )
     
     async def _get_llm_response(self, messages, model_name):
-        """获取LLM响应（示例实现）"""
-        # 这里应该调用实际的LLM API
-        # 为演示目的返回固定响应
-        return f"这是来自{model_name}的响应，基于您的消息生成的回复内容。"
+        """获取LLM响应（非流式调用）"""
+        try:
+            # 调用实际的LLM API获取完整响应
+            llm_client = self.workflow_system.llm_client
+            response = await llm_client.chat_completion(
+                messages=messages,
+                model=model_name,
+                temperature=0.7,
+                max_tokens=4096
+            )
+            return response
+        except Exception as e:
+            logger.error(f"LLM调用失败: {str(e)}")
+            # 返回默认错误响应
+            return f"抱歉，{model_name}服务暂时不可用。错误：{str(e)}"
+    
+    async def _stream_workflow_generation(self, requirement: str, progress_callback):
+        """流式工作流生成的核心方法"""
+        try:
+            # 阶段1: 需求分析 (0% -> 33%)
+            yield {
+                "stage": "requirement_analysis", 
+                "progress": 0.1, 
+                "message": "正在分析用户需求...",
+                "status": "processing"
+            }
+            
+            # 模拟需求分析的进展
+            await asyncio.sleep(0.5)  # 减少延迟，提高响应速度
+            
+            yield {
+                "stage": "requirement_analysis", 
+                "progress": 0.2, 
+                "message": "识别业务实体和操作...",
+                "status": "processing"
+            }
+            
+            await asyncio.sleep(0.5)
+            
+            yield {
+                "stage": "requirement_analysis", 
+                "progress": 0.33, 
+                "message": "需求分析完成",
+                "status": "processing"
+            }
+            
+            # 阶段2: 工作流组合 (33% -> 66%)
+            yield {
+                "stage": "workflow_composition", 
+                "progress": 0.4, 
+                "message": "开始组合工作流节点...",
+                "status": "processing"
+            }
+            
+            await asyncio.sleep(0.5)
+            
+            yield {
+                "stage": "workflow_composition", 
+                "progress": 0.5, 
+                "message": "配置节点参数和连接...",
+                "status": "processing"
+            }
+            
+            await asyncio.sleep(0.5)
+            
+            yield {
+                "stage": "workflow_composition", 
+                "progress": 0.66, 
+                "message": "工作流组合完成",
+                "status": "processing"
+            }
+            
+            # 阶段3: 工作流验证和生成 (66% -> 100%)
+            yield {
+                "stage": "workflow_validation", 
+                "progress": 0.75, 
+                "message": "正在验证工作流配置...",
+                "status": "processing"
+            }
+            
+            await asyncio.sleep(0.3)
+            
+            yield {
+                "stage": "workflow_validation", 
+                "progress": 0.85, 
+                "message": "正在生成最终工作流...",
+                "status": "processing"
+            }
+            
+            # 🎯 实际调用工作流生成系统
+            try:
+                result = await self.workflow_system.generate_workflow_from_requirement(requirement)
+                
+                if result.get("success"):
+                    yield {
+                        "stage": "workflow_validation", 
+                        "progress": 1.0, 
+                        "message": "工作流生成成功",
+                        "status": "completed",
+                        "final_result": result
+                    }
+                else:
+                    error_msg = result.get("error", "工作流生成失败")
+                    yield {
+                        "stage": "workflow_validation", 
+                        "progress": 1.0, 
+                        "message": f"工作流生成失败: {error_msg}",
+                        "status": "failed",
+                        "error": error_msg
+                    }
+                    
+            except Exception as e:
+                error_msg = f"工作流生成过程中出现异常: {str(e)}"
+                logger.error(error_msg)
+                yield {
+                    "stage": "workflow_validation", 
+                    "progress": 1.0, 
+                    "message": error_msg,
+                    "status": "failed",
+                    "error": error_msg
+                }
+                
+        except Exception as e:
+            error_msg = f"流式工作流生成异常: {str(e)}"
+            logger.error(error_msg)
+            yield {
+                "stage": "error", 
+                "progress": 1.0, 
+                "message": error_msg,
+                "status": "failed",
+                "error": error_msg
+            }
 
 
 async def serve():

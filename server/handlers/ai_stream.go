@@ -176,6 +176,16 @@ func (h *AIStreamHandler) StreamChatHandler() gin.HandlerFunc {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Headers", "Cache-Control")
 
+		// 🎯 添加更多防缓冲头
+		c.Header("X-Accel-Buffering", "no")      // 防止nginx缓冲
+		c.Header("Transfer-Encoding", "chunked") // 使用chunked编码
+		c.Writer.WriteHeaderNow()                // 立即发送头部
+
+		// 🎯 立即发送一个初始事件以建立连接
+		flusher := c.Writer.(http.Flusher)
+		c.Writer.WriteString(": connected\n\n") // SSE注释，不会被客户端处理但建立连接
+		flusher.Flush()
+
 		// 创建响应通道
 		responseChan := make(chan *services.StreamChatResponse)
 
@@ -193,7 +203,6 @@ func (h *AIStreamHandler) StreamChatHandler() gin.HandlerFunc {
 		}
 
 		// 流式发送响应
-		flusher := c.Writer.(http.Flusher)
 		var totalTokensUsed int32 = 0
 		var totalPointsConsumed int32 = 0
 
@@ -393,6 +402,16 @@ func (h *AIStreamHandler) StreamWorkflowGenerateHandler() gin.HandlerFunc {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Headers", "Cache-Control")
 
+		// 🎯 添加更多防缓冲头
+		c.Header("X-Accel-Buffering", "no")      // 防止nginx缓冲
+		c.Header("Transfer-Encoding", "chunked") // 使用chunked编码
+		c.Writer.WriteHeaderNow()                // 立即发送头部
+
+		// 🎯 立即发送一个初始事件以建立连接
+		flusher := c.Writer.(http.Flusher)
+		c.Writer.WriteString(": connected\n\n") // SSE注释，不会被客户端处理但建立连接
+		flusher.Flush()
+
 		// 创建响应通道
 		responseChan := make(chan *services.StreamWorkflowResponse)
 
@@ -418,7 +437,6 @@ func (h *AIStreamHandler) StreamWorkflowGenerateHandler() gin.HandlerFunc {
 		}
 
 		// 流式发送响应
-		flusher := c.Writer.(http.Flusher)
 		var totalOutputLength int
 
 		for response := range responseChan {
@@ -508,20 +526,31 @@ func (h *AIStreamHandler) WebSocketChatHandler() gin.HandlerFunc {
 // HealthCheckHandler 健康检查
 func (h *AIStreamHandler) HealthCheckHandler() gin.HandlerFunc {
 	return gin.HandlerFunc(func(c *gin.Context) {
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
-		defer cancel()
+		ctx := c.Request.Context()
 
+		// 检查gRPC连接
 		err := h.grpcClient.HealthCheck(ctx)
 		if err != nil {
+			log.Errorf("AI gRPC服务健康检查失败: %v", err)
 			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"status": "unhealthy",
-				"error":  err.Error(),
+				"status":  "unhealthy",
+				"message": "AI gRPC服务不可用",
+				"error":   err.Error(),
 			})
 			return
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"status": "healthy",
+			"status":    "healthy",
+			"message":   "AI流式服务正常运行",
+			"timestamp": time.Now().Format(time.RFC3339),
+			"services": gin.H{
+				"grpc": "connected",
+				"streaming": gin.H{
+					"chat":              "/ai/stream/chat",
+					"workflow_generate": "/ai/stream/workflow/generate",
+				},
+			},
 		})
 	})
 }
