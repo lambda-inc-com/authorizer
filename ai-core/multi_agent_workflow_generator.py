@@ -322,26 +322,39 @@ class MultiAgentOrchestrator:
         }
     
     async def _wait_for_task_completion(self, agent_role: AgentRole) -> bool:
-        """等待任务完成并返回成功状态"""
+        """等待任务完成并返回成功状态 - 改进版本，支持心跳监控"""
         # 等待智能体完成任务
-        timeout = 1200  
+        timeout = 1200  # 20分钟超时
         start_time = asyncio.get_event_loop().time()
+        last_log_time = start_time
         
         while self.agents[agent_role].is_busy:
+            current_time = asyncio.get_event_loop().time()
+            
             # 检查超时
-            if asyncio.get_event_loop().time() - start_time > timeout:
+            if current_time - start_time > timeout:
                 logger.error(f"{agent_role.value} 任务超时")
                 return False
+            
+            # 每30秒输出一次心跳日志
+            if current_time - last_log_time >= 30:
+                elapsed_time = current_time - start_time
+                logger.info(f"{agent_role.value} 任务进行中，已耗时 {elapsed_time:.1f} 秒")
+                last_log_time = current_time
                 
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(1)  # 增加检查间隔从0.1秒到1秒
         
         # 检查任务是否成功完成
-        # 我们需要在智能体中设置一个状态来跟踪最后的任务结果
         agent = self.agents[agent_role]
         if hasattr(agent, 'last_task_success'):
-            return agent.last_task_success
+            success = agent.last_task_success
+            elapsed_time = asyncio.get_event_loop().time() - start_time
+            logger.info(f"{agent_role.value} 任务完成，耗时 {elapsed_time:.1f} 秒，成功: {success}")
+            return success
         
         # 如果没有明确的失败信息，假设成功
+        elapsed_time = asyncio.get_event_loop().time() - start_time
+        logger.info(f"{agent_role.value} 任务完成，耗时 {elapsed_time:.1f} 秒")
         return True
     
     async def _handle_validation_failure(self, validation_result: Dict[str, Any]):

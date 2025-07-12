@@ -284,10 +284,29 @@ func (h *AIStreamHandler) StreamWorkflowGenerateHandler() gin.HandlerFunc {
 			return
 		}
 
+		// 先读取原始请求体
+		body, err := c.GetRawData()
+		if err != nil {
+			log.Errorf("读取请求体失败，用户ID: %s，错误: %v", userID, err)
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "Failed to read request body",
+			})
+			return
+		}
+
 		var request StreamWorkflowRequest
-		if err := c.ShouldBindJSON(&request); err != nil {
+		if err := json.Unmarshal(body, &request); err != nil {
+			log.Errorf("JSON解析失败，用户ID: %s，错误: %v", userID, err)
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": "Invalid request format: " + err.Error(),
+			})
+			return
+		}
+
+		// 验证必填字段
+		if request.Requirement == "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "requirement field is required",
 			})
 			return
 		}
@@ -423,8 +442,8 @@ func (h *AIStreamHandler) StreamWorkflowGenerateHandler() gin.HandlerFunc {
 			inputs[k] = v
 		}
 
-		// 启动gRPC流式调用 - 增加超时时间以适应线上环境
-		streamCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+		// 启动gRPC流式调用 - 增加超时时间以适应线上环境和复杂工作流生成
+		streamCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 		defer cancel()
 
 		err = h.grpcClient.StreamWorkflowGenerate(streamCtx, userID, inputs, responseChan)

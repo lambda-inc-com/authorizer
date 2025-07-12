@@ -349,10 +349,29 @@ func (c *AIGRPCClient) doStreamWorkflowGenerate(ctx context.Context, userID stri
 				break
 			}
 			if err != nil {
+				// 改进错误处理，提供更友好的错误信息
+				var errorMsg string
+				if st, ok := status.FromError(err); ok {
+					switch st.Code() {
+					case codes.DeadlineExceeded:
+						errorMsg = "工作流生成超时，请稍后重试"
+					case codes.Unavailable:
+						errorMsg = "AI服务暂时不可用，请稍后重试"
+					case codes.Canceled:
+						errorMsg = "工作流生成被取消"
+					case codes.ResourceExhausted:
+						errorMsg = "服务器资源不足，请稍后重试"
+					default:
+						errorMsg = fmt.Sprintf("工作流生成失败: %s", st.Message())
+					}
+				} else {
+					errorMsg = fmt.Sprintf("工作流生成失败: %v", err)
+				}
+
 				log.Errorf("接收流式工作流生成响应失败: %v", err)
 				// 发送错误响应
 				responseChan <- &StreamWorkflowResponse{
-					Error:      err.Error(),
+					Error:      errorMsg,
 					IsComplete: true,
 				}
 				break
@@ -414,14 +433,25 @@ func isRetryableError(err error) bool {
 	// 检查 gRPC 状态码
 	if st, ok := status.FromError(err); ok {
 		switch st.Code() {
-		case codes.DeadlineExceeded, codes.Unavailable, codes.ResourceExhausted, codes.Aborted, codes.Canceled:
+		case codes.DeadlineExceeded, codes.Unavailable, codes.ResourceExhausted, codes.Aborted:
 			return true
+		case codes.Canceled:
+			// 对于Canceled错误，只有在不是客户端主动取消的情况下才重试
+			if !errors.Is(err, context.Canceled) {
+				return true
+			}
+			return false
 		}
 	}
 
 	// 检查连接相关错误
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return true
+	}
+
+	// 对于context.Canceled，不重试（通常是客户端主动取消）
+	if errors.Is(err, context.Canceled) {
+		return false
 	}
 
 	return false

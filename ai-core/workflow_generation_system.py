@@ -825,80 +825,127 @@ class WorkflowGenerationSystem(MultiAgentOrchestrator):
         logger.info("智能体设置完成")
     
     async def generate_workflow_from_requirement(self, user_requirement: str) -> Dict[str, Any]:
-        """从用户需求生成工作流"""
-        try:
-            logger.info(f"开始生成工作流，用户需求: {user_requirement}")
+        """从用户需求生成工作流 - 改进版本，支持错误重试"""
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                logger.info(f"开始生成工作流，用户需求: {user_requirement} (尝试 {retry_count + 1}/{max_retries + 1})")
+                
+                # 🔥 首先验证模型可用性
+                logger.info("验证模型可用性...")
+                model_test = await self.llm_client.test_connection_and_model()
+                
+                if not model_test.get("success"):
+                    error_msg = f"模型验证失败: {model_test.get('error', '未知错误')}"
+                    logger.error(error_msg)
+                    
+                    # 如果是模型配置问题，不重试
+                    if retry_count == 0:
+                        # 提供建议的模型
+                        recommended = self.llm_client.get_recommended_models()
+                        available_models = model_test.get("available_models", [])
+                        
+                        return {
+                            "success": False,
+                            "error": error_msg,
+                            "message": "模型验证失败，请检查模型配置",
+                            "suggestions": {
+                                "recommended_models": recommended,
+                                "available_models": available_models,
+                                "current_config": {
+                                    "provider": self.llm_client._cached_config.get("provider") if self.llm_client._cached_config else None,
+                                    "base_url": self.llm_client._cached_config.get("base_url") if self.llm_client._cached_config else None,
+                                    "model_name": self.llm_client._cached_config.get("model_name") if self.llm_client._cached_config else None
+                                }
+                            }
+                        }
+                    
+                    # 重试前等待
+                    await asyncio.sleep(2 ** retry_count)  # 指数退避
+                    retry_count += 1
+                    continue
+                
+                # 模型验证成功，显示使用的模型信息
+                used_model = model_test.get("model")
+                service_type = model_test.get("service_type")
+                logger.info(f"✅ 模型验证成功 - 使用模型: {used_model} (服务: {service_type})")
+                
+                if model_test.get("note"):
+                    logger.info(f"ℹ️  {model_test.get('note')}")
+                
+                # 调用父类的生成方法
+                result = await self.generate_workflow(user_requirement)
+                
+                if result["success"]:
+                    logger.info("工作流生成成功")
+                    return {
+                        "success": True,
+                        "workflow": result["workflow"],
+                        "generation_history": result["generation_history"],
+                        "message": "工作流生成成功",
+                        "model_info": {
+                            "used_model": used_model,
+                            "service_type": service_type,
+                            "note": model_test.get("note")
+                        }
+                    }
+                else:
+                    error_msg = result.get("error", "工作流生成失败")
+                    logger.error(f"工作流生成失败: {error_msg}")
+                    
+                    # 检查是否是可重试的错误
+                    if self._is_retryable_error(error_msg) and retry_count < max_retries:
+                        logger.info(f"错误可重试，等待 {2 ** retry_count} 秒后重试...")
+                        await asyncio.sleep(2 ** retry_count)
+                        retry_count += 1
+                        continue
+                    
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "message": "工作流生成失败",
+                        "model_info": {
+                            "used_model": used_model,
+                            "service_type": service_type
+                        }
+                    }
             
-            # 🔥 首先验证模型可用性
-            logger.info("验证模型可用性...")
-            model_test = await self.llm_client.test_connection_and_model()
-            
-            if not model_test.get("success"):
-                error_msg = f"模型验证失败: {model_test.get('error', '未知错误')}"
+            except Exception as e:
+                error_msg = f"工作流生成系统异常: {str(e)}"
                 logger.error(error_msg)
                 
-                # 提供建议的模型
-                recommended = self.llm_client.get_recommended_models()
-                available_models = model_test.get("available_models", [])
+                # 检查是否是可重试的错误
+                if self._is_retryable_error(str(e)) and retry_count < max_retries:
+                    logger.info(f"异常可重试，等待 {2 ** retry_count} 秒后重试...")
+                    await asyncio.sleep(2 ** retry_count)
+                    retry_count += 1
+                    continue
                 
                 return {
                     "success": False,
                     "error": error_msg,
-                    "message": "模型验证失败，请检查模型配置",
-                    "suggestions": {
-                        "recommended_models": recommended,
-                        "available_models": available_models,
-                        "current_config": {
-                            "provider": self.llm_client._cached_config.get("provider") if self.llm_client._cached_config else None,
-                            "base_url": self.llm_client._cached_config.get("base_url") if self.llm_client._cached_config else None,
-                            "model_name": self.llm_client._cached_config.get("model_name") if self.llm_client._cached_config else None
-                        }
-                    }
-                }
-            
-            # 模型验证成功，显示使用的模型信息
-            used_model = model_test.get("model")
-            service_type = model_test.get("service_type")
-            logger.info(f"✅ 模型验证成功 - 使用模型: {used_model} (服务: {service_type})")
-            
-            if model_test.get("note"):
-                logger.info(f"ℹ️  {model_test.get('note')}")
-            
-            # 调用父类的生成方法
-            result = await self.generate_workflow(user_requirement)
-            
-            if result["success"]:
-                logger.info("工作流生成成功")
-                return {
-                    "success": True,
-                    "workflow": result["workflow"],
-                    "generation_history": result["generation_history"],
-                    "message": "工作流生成成功",
-                    "model_info": {
-                        "used_model": used_model,
-                        "service_type": service_type,
-                        "note": model_test.get("note")
-                    }
-                }
-            else:
-                logger.error(f"工作流生成失败: {result['error']}")
-                return {
-                    "success": False,
-                    "error": result["error"],
-                    "message": "工作流生成失败",
-                    "model_info": {
-                        "used_model": used_model,
-                        "service_type": service_type
-                    }
+                    "message": "工作流生成系统异常"
                 }
         
-        except Exception as e:
-            logger.error(f"工作流生成系统异常: {str(e)}")
-            return {
-                "success": False,
-                "error": str(e),
-                "message": "工作流生成系统异常"
-            }
+        # 如果所有重试都失败了
+        return {
+            "success": False,
+            "error": f"工作流生成失败，已重试 {max_retries} 次",
+            "message": "工作流生成失败，请稍后重试"
+        }
+    
+    def _is_retryable_error(self, error_msg: str) -> bool:
+        """判断错误是否可重试"""
+        retryable_keywords = [
+            "timeout", "超时", "connection", "连接", "网络", "network",
+            "rate limit", "限流", "service unavailable", "服务不可用",
+            "internal server error", "内部服务器错误", "502", "503", "504"
+        ]
+        
+        error_lower = error_msg.lower()
+        return any(keyword in error_lower for keyword in retryable_keywords)
     
     async def validate_workflow(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
         """验证工作流"""

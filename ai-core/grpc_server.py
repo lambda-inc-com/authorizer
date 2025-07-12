@@ -332,85 +332,147 @@ class AIStreamServiceImpl(ai_service_stream_pb2_grpc.AIStreamServiceServicer):
             return f"抱歉，{model_name}服务暂时不可用。错误：{str(e)}"
     
     async def _stream_workflow_generation(self, requirement: str, progress_callback):
-        """流式工作流生成的核心方法"""
+        """流式工作流生成的核心方法 - 改进版本，支持真正的流式更新"""
         try:
-            # 阶段1: 需求分析 (0% -> 33%)
+            # 阶段1: 需求分析 (0% -> 30%)
             yield {
                 "stage": "requirement_analysis", 
-                "progress": 0.1, 
-                "message": "正在分析用户需求...",
+                "progress": 0.05, 
+                "message": "开始分析用户需求...",
                 "status": "processing"
             }
             
-            # 模拟需求分析的进展
-            await asyncio.sleep(0.5)  # 减少延迟，提高响应速度
+            await asyncio.sleep(0.2)
             
             yield {
                 "stage": "requirement_analysis", 
-                "progress": 0.2, 
+                "progress": 0.15, 
                 "message": "识别业务实体和操作...",
-                "status": "processing"
-            }
-            
-            await asyncio.sleep(0.5)
-            
-            yield {
-                "stage": "requirement_analysis", 
-                "progress": 0.33, 
-                "message": "需求分析完成",
-                "status": "processing"
-            }
-            
-            # 阶段2: 工作流组合 (33% -> 66%)
-            yield {
-                "stage": "workflow_composition", 
-                "progress": 0.4, 
-                "message": "开始组合工作流节点...",
-                "status": "processing"
-            }
-            
-            await asyncio.sleep(0.5)
-            
-            yield {
-                "stage": "workflow_composition", 
-                "progress": 0.5, 
-                "message": "配置节点参数和连接...",
-                "status": "processing"
-            }
-            
-            await asyncio.sleep(0.5)
-            
-            yield {
-                "stage": "workflow_composition", 
-                "progress": 0.66, 
-                "message": "工作流组合完成",
-                "status": "processing"
-            }
-            
-            # 阶段3: 工作流验证和生成 (66% -> 100%)
-            yield {
-                "stage": "workflow_validation", 
-                "progress": 0.75, 
-                "message": "正在验证工作流配置...",
                 "status": "processing"
             }
             
             await asyncio.sleep(0.3)
             
             yield {
-                "stage": "workflow_validation", 
-                "progress": 0.85, 
-                "message": "正在生成最终工作流...",
+                "stage": "requirement_analysis", 
+                "progress": 0.25, 
+                "message": "分析需求复杂度...",
                 "status": "processing"
             }
             
-            # 🎯 实际调用工作流生成系统
+            await asyncio.sleep(0.2)
+            
+            yield {
+                "stage": "requirement_analysis", 
+                "progress": 0.30, 
+                "message": "需求分析完成",
+                "status": "processing"
+            }
+            
+            # 阶段2: 工作流组合 (30% -> 60%)
+            yield {
+                "stage": "workflow_composition", 
+                "progress": 0.35, 
+                "message": "开始组合工作流节点...",
+                "status": "processing"
+            }
+            
+            await asyncio.sleep(0.3)
+            
+            yield {
+                "stage": "workflow_composition", 
+                "progress": 0.45, 
+                "message": "配置节点参数和连接...",
+                "status": "processing"
+            }
+            
+            await asyncio.sleep(0.4)
+            
+            yield {
+                "stage": "workflow_composition", 
+                "progress": 0.55, 
+                "message": "优化节点布局...",
+                "status": "processing"
+            }
+            
+            await asyncio.sleep(0.3)
+            
+            yield {
+                "stage": "workflow_composition", 
+                "progress": 0.60, 
+                "message": "工作流组合完成",
+                "status": "processing"
+            }
+            
+            # 阶段3: 工作流验证和生成 (60% -> 100%)
+            yield {
+                "stage": "workflow_validation", 
+                "progress": 0.65, 
+                "message": "正在验证工作流配置...",
+                "status": "processing"
+            }
+            
+            await asyncio.sleep(0.2)
+            
+            yield {
+                "stage": "workflow_generation", 
+                "progress": 0.70, 
+                "message": "开始生成最终工作流...",
+                "status": "processing"
+            }
+            
+            # 🎯 实际调用工作流生成系统，并在生成过程中持续发送更新
             try:
-                result = await self.workflow_system.generate_workflow_from_requirement(requirement)
+                # 创建一个异步任务来生成工作流
+                generation_task = asyncio.create_task(
+                    self.workflow_system.generate_workflow_from_requirement(requirement)
+                )
+                
+                # 在等待生成完成时，持续发送心跳更新
+                progress_steps = [0.75, 0.80, 0.85, 0.90, 0.95]
+                messages = [
+                    "正在执行需求分析...",
+                    "正在组合工作流节点...", 
+                    "正在验证工作流逻辑...",
+                    "正在优化工作流结构...",
+                    "正在生成最终配置..."
+                ]
+                
+                step_index = 0
+                last_heartbeat = asyncio.get_event_loop().time()
+                
+                while not generation_task.done():
+                    await asyncio.sleep(2)  # 每2秒检查一次
+                    
+                    current_time = asyncio.get_event_loop().time()
+                    
+                    # 每10秒发送一次心跳更新
+                    if current_time - last_heartbeat >= 10:
+                        if step_index < len(progress_steps):
+                            yield {
+                                "stage": "workflow_generation", 
+                                "progress": progress_steps[step_index], 
+                                "message": messages[step_index],
+                                "status": "processing"
+                            }
+                            step_index += 1
+                        else:
+                            # 继续发送心跳但不改变进度
+                            yield {
+                                "stage": "workflow_generation", 
+                                "progress": 0.95, 
+                                "message": "正在完成最终处理...",
+                                "status": "processing"
+                            }
+                        
+                        last_heartbeat = current_time
+                
+                # 获取生成结果
+                result = await generation_task
                 
                 if result.get("success"):
                     yield {
-                        "stage": "workflow_validation", 
+                        "stage": "workflow_generation", 
                         "progress": 1.0, 
                         "message": "工作流生成成功",
                         "status": "completed",
@@ -419,7 +481,7 @@ class AIStreamServiceImpl(ai_service_stream_pb2_grpc.AIStreamServiceServicer):
                 else:
                     error_msg = result.get("error", "工作流生成失败")
                     yield {
-                        "stage": "workflow_validation", 
+                        "stage": "workflow_generation", 
                         "progress": 1.0, 
                         "message": f"工作流生成失败: {error_msg}",
                         "status": "failed",
@@ -430,7 +492,7 @@ class AIStreamServiceImpl(ai_service_stream_pb2_grpc.AIStreamServiceServicer):
                 error_msg = f"工作流生成过程中出现异常: {str(e)}"
                 logger.error(error_msg)
                 yield {
-                    "stage": "workflow_validation", 
+                    "stage": "workflow_generation", 
                     "progress": 1.0, 
                     "message": error_msg,
                     "status": "failed",
@@ -451,21 +513,22 @@ class AIStreamServiceImpl(ai_service_stream_pb2_grpc.AIStreamServiceServicer):
 
 async def serve():
     """启动gRPC服务器"""
-    # 配置服务器选项，防止 "Too many pings" 错误
+    # 配置服务器选项，优化长时间流式处理
     options = [
-        ('grpc.keepalive_time_ms', 30000),  # 30秒发送一次keepalive（与客户端保持一致）
+        ('grpc.keepalive_time_ms', 30000),  # 30秒发送一次keepalive
         ('grpc.keepalive_timeout_ms', 10000),  # 10秒keepalive超时
-        ('grpc.keepalive_permit_without_calls', False),  # 禁止没有调用时发送keepalive
+        ('grpc.keepalive_permit_without_calls', True),  # 允许没有调用时发送keepalive
         ('grpc.http2.max_pings_without_data', 0),  # 不限制ping数量
-        ('grpc.http2.min_time_between_pings_ms', 30000),  # ping间隔30秒，与keepalive保持一致
-        ('grpc.http2.min_ping_interval_without_data_ms', 300000),  # 5分钟无数据ping间隔
+        ('grpc.http2.min_time_between_pings_ms', 10000),  # ping间隔10秒
+        ('grpc.http2.min_ping_interval_without_data_ms', 30000),  # 30秒（从5分钟减少到30秒）
         ('grpc.max_receive_message_length', 100 * 1024 * 1024),  # 100MB接收限制
         ('grpc.max_send_message_length', 100 * 1024 * 1024),  # 100MB发送限制
-        ('grpc.so_reuseport', 1),  # 允许端口重用
-        ('grpc.max_connection_idle_ms', 300000),  # 5分钟空闲连接超时
+        ('grpc.max_connection_idle_ms', 300000),  # 5分钟连接空闲超时
+        ('grpc.max_connection_age_ms', 1800000),  # 30分钟连接最大存活时间
+        ('grpc.max_connection_age_grace_ms', 60000),  # 1分钟连接优雅关闭时间
     ]
     
-    server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=20), options=options)
+    server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=10), options=options)
     
     # 注册服务
     ai_service_stream_pb2_grpc.add_AIStreamServiceServicer_to_server(
