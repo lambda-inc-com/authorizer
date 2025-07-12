@@ -451,19 +451,21 @@ class AIStreamServiceImpl(ai_service_stream_pb2_grpc.AIStreamServiceServicer):
 
 async def serve():
     """启动gRPC服务器"""
-    # 配置服务器选项，设置超时时间
+    # 配置服务器选项，设置超时时间 - 针对线上环境优化
     options = [
-        ('grpc.keepalive_time_ms', 30000),  # 30秒发送一次keepalive
-        ('grpc.keepalive_timeout_ms', 5000),  # 5秒keepalive超时
+        ('grpc.keepalive_time_ms', 10000),  # 10秒发送一次keepalive（与客户端保持一致）
+        ('grpc.keepalive_timeout_ms', 3000),  # 3秒keepalive超时
         ('grpc.keepalive_permit_without_calls', True),  # 允许没有调用时发送keepalive
         ('grpc.http2.max_pings_without_data', 0),  # 不限制ping数量
-        ('grpc.http2.min_time_between_pings_ms', 10000),  # ping间隔10秒
-        ('grpc.http2.min_ping_interval_without_data_ms', 300000),  # 5分钟
+        ('grpc.http2.min_time_between_pings_ms', 5000),  # ping间隔5秒
+        ('grpc.http2.min_ping_interval_without_data_ms', 60000),  # 1分钟无数据ping间隔
         ('grpc.max_receive_message_length', 100 * 1024 * 1024),  # 100MB接收限制
         ('grpc.max_send_message_length', 100 * 1024 * 1024),  # 100MB发送限制
+        ('grpc.so_reuseport', 1),  # 允许端口重用
+        ('grpc.max_connection_idle_ms', 60000),  # 60秒空闲连接超时
     ]
     
-    server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=10), options=options)
+    server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=20), options=options)
     
     # 注册服务
     ai_service_stream_pb2_grpc.add_AIStreamServiceServicer_to_server(

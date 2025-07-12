@@ -324,7 +324,7 @@ class MultiAgentOrchestrator:
     async def _wait_for_task_completion(self, agent_role: AgentRole) -> bool:
         """等待任务完成并返回成功状态"""
         # 等待智能体完成任务
-        timeout = 120  # 2分钟超时
+        timeout = 1200  
         start_time = asyncio.get_event_loop().time()
         
         while self.agents[agent_role].is_busy:

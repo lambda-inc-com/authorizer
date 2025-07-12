@@ -423,16 +423,18 @@ func (h *AIStreamHandler) StreamWorkflowGenerateHandler() gin.HandlerFunc {
 			inputs[k] = v
 		}
 
-		// 启动gRPC流式调用
-		streamCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		// 启动gRPC流式调用 - 增加超时时间以适应线上环境
+		streamCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 		defer cancel()
 
 		err = h.grpcClient.StreamWorkflowGenerate(streamCtx, userID, inputs, responseChan)
 		if err != nil {
 			log.Errorf("启动流式工作流生成失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": "Failed to start streaming workflow generation",
-			})
+
+			// 发送错误信息到客户端
+			c.Writer.WriteString(fmt.Sprintf("data: %s\n\n",
+				`{"error":"工作流生成服务暂时不可用，请稍后重试","is_complete":true,"workflow_id":""}`))
+			c.Writer.(http.Flusher).Flush()
 			return
 		}
 
