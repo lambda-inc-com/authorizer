@@ -53,9 +53,9 @@ func (c *AIGRPCClient) connect() error {
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                10 * time.Second, // 减少到10秒发送一次keepalive
-			Timeout:             3 * time.Second,  // 3秒keepalive超时
-			PermitWithoutStream: true,             // 允许没有流时发送keepalive
+			Time:                30 * time.Second, // 30秒发送一次keepalive，避免过于频繁
+			Timeout:             10 * time.Second, // 10秒keepalive超时
+			PermitWithoutStream: false,            // 禁止没有流时发送keepalive，减少ping数量
 		}),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(100*1024*1024), // 100MB接收限制
