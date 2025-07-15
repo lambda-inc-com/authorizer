@@ -296,11 +296,11 @@ class WorkflowValidator(BaseAgent):
             if field not in workflow:
                 errors.append(f"工作流缺少必需字段: {field}")
         
-        # 检查工作流名称是否使用英文
-        if "name" in workflow:
-            workflow_name = workflow["name"]
-            if not self._is_english_name(workflow_name):
-                errors.append(f"工作流名称 '{workflow_name}' 必须使用英文，采用PascalCase或camelCase格式")
+                 # 检查工作流名称是否使用英文且以大写字母开头
+         if "name" in workflow:
+             workflow_name = workflow["name"]
+             if not self._is_english_name(workflow_name):
+                 errors.append(f"工作流名称 '{workflow_name}' 必须使用英文且以大写字母开头，采用PascalCase格式（如：UserRegistrationWorkflow）")
         
         # 检查节点
         if "nodes" in workflow:
@@ -335,11 +335,11 @@ class WorkflowValidator(BaseAgent):
             if node["type"] not in self.validation_rules["structure_rules"]["valid_node_types"]:
                 errors.append(f"节点 {node.get('name', index)} 的类型 {node['type']} 无效")
         
-        # 检查节点名称是否使用英文
-        if "name" in node:
-            node_name = node["name"]
-            if not self._is_english_name(node_name):
-                errors.append(f"节点 {node_name} 的名称必须使用英文，采用PascalCase格式")
+                 # 检查节点名称是否使用英文且以大写字母开头
+         if "name" in node:
+             node_name = node["name"]
+             if not self._is_english_name(node_name):
+                 errors.append(f"节点 '{node_name}' 的名称必须使用英文且以大写字母开头，采用PascalCase格式（如：QueryUser、CreateOrder）")
         
         return errors
     
@@ -589,7 +589,14 @@ class WorkflowValidator(BaseAgent):
         # 检查节点名称唯一性
         node_names = [node.get("name", f"node_{i}") for i, node in enumerate(nodes)]
         if len(node_names) != len(set(node_names)):
-            errors.append("节点名称必须唯一")
+            # 找出重复的节点名称
+            duplicates = []
+            seen = set()
+            for name in node_names:
+                if name in seen and name not in duplicates:
+                    duplicates.append(name)
+                seen.add(name)
+            errors.append(f"节点名称必须唯一，发现重复的节点名称: {', '.join(duplicates)}")
         
         # 检查起始和结束节点
         start_nodes = [node for node in nodes if node.get("type") == "workflowStart"]
@@ -770,10 +777,10 @@ class WorkflowValidator(BaseAgent):
         }
     
     def _is_english_name(self, name: str) -> bool:
-        """检查名称是否使用英文字符"""
+        """检查名称是否使用英文字符且以大写字母开头（PascalCase格式）"""
         import re
-        # 检查是否只包含英文字母、数字和下划线，并且不能以数字开头
-        return bool(re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', name))
+        # 检查是否只包含英文字母和数字，必须以大写字母开头，采用PascalCase格式
+        return bool(re.match(r'^[A-Z][a-zA-Z0-9]*$', name))
     
     def _validate_node_references(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
         """验证节点引用的准确性"""

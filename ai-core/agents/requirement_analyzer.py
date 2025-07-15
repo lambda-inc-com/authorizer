@@ -498,8 +498,9 @@ class RequirementAnalyzer(BaseAgent):
 3. **实用性**: 配置能够在实际业务场景中正常工作
 4. **一致性**: 字段名和数据引用必须准确
 5. **描述性**: 节点名称和描述要清晰明确
-6. **英文命名**: 节点名称必须使用英文，采用PascalCase格式，如: "QuerySupplier", "CreateUser"
-7. **引用准确性**: 所有数据引用必须使用实际存在的节点名称，禁止使用虚构的节点名称
+6. **英文命名**: 节点名称必须使用英文且以大写字母开头，采用PascalCase格式，如: "QuerySupplier", "CreateUser", "CheckUserExists"
+7. **唯一性**: 节点名称必须唯一，不能与其他节点重复
+8. **引用准确性**: 所有数据引用必须使用实际存在的节点名称，禁止使用虚构的节点名称
 
 ## 输出格式
 请直接输出完整的JSON节点配置，不要包含任何额外的说明文字：
@@ -517,7 +518,7 @@ class RequirementAnalyzer(BaseAgent):
 ```
 
 请确保输出的JSON格式完全正确，可以直接解析使用。
-**特别注意**: 节点名称必须使用英文，采用PascalCase格式，如 "QuerySupplier", "CreateUser"。"""
+**特别注意**: 节点名称必须使用英文且以大写字母开头，采用PascalCase格式，如 "QuerySupplier", "CreateUser", "CheckUserExists"。确保节点名称唯一，不与其他节点重复。"""
         
         return base_prompt
     
@@ -609,6 +610,8 @@ class RequirementAnalyzer(BaseAgent):
 - 引用格式: $.NodeName.outputs.fieldName 或 $.NodeName.inputs.fieldName
 
 **特别注意**:
+- 节点名称必须以大写字母开头，采用PascalCase格式，如 "QueryUser", "CreateOrder", "CheckUserExists"
+- 节点名称必须唯一，不能与已生成的节点名称重复
 - 禁止使用不存在的节点名称，如 "StartNode", "ValidateSupplier", "CheckProduct" 等
 - 必须使用建议的节点名称，确保引用的准确性
 - 如果需要引用其他节点的数据，请使用上述 "已生成的节点名称" 中的名称
@@ -854,15 +857,20 @@ class RequirementAnalyzer(BaseAgent):
             }
         }
         
-        return default_configs.get(node_type, {
-            "name": "DefaultNode",
-            "type": node_type,
-            "desc": f"默认{node_type}节点",
-            "inputs": {},
-            "outputs": {},
-            "configs": {},
-            "nextNodes": []
-        })
+                 # 生成符合PascalCase格式的默认节点名称
+         default_name = f"Default{node_type.title()}Node"
+         if not default_name[0].isupper():
+             default_name = default_name[0].upper() + default_name[1:]
+         
+         return default_configs.get(node_type, {
+             "name": default_name,
+             "type": node_type,
+             "desc": f"默认{node_type}节点",
+             "inputs": {},
+             "outputs": {},
+             "configs": {},
+             "nextNodes": []
+         })
     
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """解析LLM响应"""
