@@ -297,7 +297,7 @@ class WorkflowValidator(BaseAgent):
                 errors.append(f"工作流缺少必需字段: {field}")
         
                  # 检查工作流名称是否使用英文且以大写字母开头
-         if "name" in workflow:
+        if "name" in workflow:
              workflow_name = workflow["name"]
              if not self._is_english_name(workflow_name):
                  errors.append(f"工作流名称 '{workflow_name}' 必须使用英文且以大写字母开头，采用PascalCase格式（如：UserRegistrationWorkflow）")
@@ -336,7 +336,7 @@ class WorkflowValidator(BaseAgent):
                 errors.append(f"节点 {node.get('name', index)} 的类型 {node['type']} 无效")
         
                  # 检查节点名称是否使用英文且以大写字母开头
-         if "name" in node:
+        if "name" in node:
              node_name = node["name"]
              if not self._is_english_name(node_name):
                  errors.append(f"节点 '{node_name}' 的名称必须使用英文且以大写字母开头，采用PascalCase格式（如：QueryUser、CreateOrder）")

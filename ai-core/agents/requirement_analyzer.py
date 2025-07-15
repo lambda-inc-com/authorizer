@@ -857,20 +857,20 @@ class RequirementAnalyzer(BaseAgent):
             }
         }
         
-                 # 生成符合PascalCase格式的默认节点名称
-         default_name = f"Default{node_type.title()}Node"
-         if not default_name[0].isupper():
-             default_name = default_name[0].upper() + default_name[1:]
-         
-         return default_configs.get(node_type, {
-             "name": default_name,
-             "type": node_type,
-             "desc": f"默认{node_type}节点",
-             "inputs": {},
-             "outputs": {},
-             "configs": {},
-             "nextNodes": []
-         })
+        # 生成符合PascalCase格式的默认节点名称
+        default_name = f"Default{node_type.title()}Node"
+        if not default_name[0].isupper():
+            default_name = default_name[0].upper() + default_name[1:]
+        
+        return default_configs.get(node_type, {
+            "name": default_name,
+            "type": node_type,
+            "desc": f"默认{node_type}节点",
+            "inputs": {},
+            "outputs": {},
+            "configs": {},
+            "nextNodes": []
+        })
     
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """解析LLM响应"""

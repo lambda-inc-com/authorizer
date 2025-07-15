@@ -559,17 +559,17 @@ workflowEnd节点必须返回标准的API响应格式，包含：
             "nodes": []
         }
         
-        # 处理节点连接关系
+                # 处理节点连接关系
         processed_nodes = self._process_node_connections(node_configs)
         
-                 # 修复节点引用
-         processed_nodes = self._fix_node_references(processed_nodes)
-         
-         # 确保节点名称唯一性
-         processed_nodes = self._ensure_unique_node_names(processed_nodes)
-         
-         # 添加节点到工作流
-         workflow["nodes"] = processed_nodes
+        # 修复节点引用
+        processed_nodes = self._fix_node_references(processed_nodes)
+        
+        # 确保节点名称唯一性
+        processed_nodes = self._ensure_unique_node_names(processed_nodes)
+        
+        # 添加节点到工作流
+        workflow["nodes"] = processed_nodes
         
         logger.info(f"成功组合工作流，包含 {len(processed_nodes)} 个节点")
         
@@ -806,19 +806,19 @@ workflowEnd节点必须返回标准的API响应格式，包含：
         
         logger.info(f"实际节点名称: {actual_node_names}")
         
-                 # 修复每个节点的引用和名称格式
-         fixed_nodes = []
-         for node in nodes:
-             # 首先修正节点名称格式
-             node = self._fix_node_name_format(node)
-             # 然后修复节点引用
-             fixed_node = self._fix_single_node_references(node, actual_node_names)
-             fixed_nodes.append(fixed_node)
-         
-                  logger.info("节点引用修复完成")
-         return fixed_nodes
+        # 修复每个节点的引用和名称格式
+        fixed_nodes = []
+        for node in nodes:
+            # 首先修正节点名称格式
+            node = self._fix_node_name_format(node)
+            # 然后修复节点引用
+            fixed_node = self._fix_single_node_references(node, actual_node_names)
+            fixed_nodes.append(fixed_node)
+        
+        logger.info("节点引用修复完成")
+        return fixed_nodes
      
-     def _fix_node_name_format(self, node: Dict[str, Any]) -> Dict[str, Any]:
+    def _fix_node_name_format(self, node: Dict[str, Any]) -> Dict[str, Any]:
          """修正节点名称格式，确保以大写字母开头的PascalCase格式"""
          import copy
          
@@ -834,7 +834,7 @@ workflowEnd节点必须返回标准的API响应格式，包含：
          
          return fixed_node
      
-     def _convert_to_pascal_case(self, name: str) -> str:
+    def _convert_to_pascal_case(self, name: str) -> str:
          """将名称转换为PascalCase格式"""
          if not name:
              return name
@@ -853,7 +853,7 @@ workflowEnd节点必须返回标准的API响应格式，包含：
          
          return clean_name
      
-     def _ensure_unique_node_names(self, nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _ensure_unique_node_names(self, nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
          """确保节点名称唯一性"""
          import copy
          
@@ -884,7 +884,7 @@ workflowEnd节点必须返回标准的API响应格式，包含：
          logger.info("节点名称唯一性检查完成")
          return unique_nodes
      
-     def _generate_unique_name(self, base_name: str, used_names: set) -> str:
+    def _generate_unique_name(self, base_name: str, used_names: set) -> str:
          """生成唯一的节点名称"""
          if base_name not in used_names:
              return base_name
@@ -896,7 +896,7 @@ workflowEnd节点必须返回标准的API响应格式，包含：
          
          return f"{base_name}{counter}"
      
-     def _update_node_references_in_list(self, nodes: List[Dict[str, Any]], old_name: str, new_name: str):
+    def _update_node_references_in_list(self, nodes: List[Dict[str, Any]], old_name: str, new_name: str):
          """更新节点列表中对指定节点的引用"""
          import copy
          
@@ -923,7 +923,7 @@ workflowEnd节点必须返回标准的API响应格式，包含：
              if "configs" in node:
                  self._update_config_references_for_rename(node["configs"], old_name, new_name)
      
-     def _update_config_references_for_rename(self, configs: dict, old_name: str, new_name: str):
+    def _update_config_references_for_rename(self, configs: dict, old_name: str, new_name: str):
          """更新配置中的节点引用"""
          def update_value(obj):
              if isinstance(obj, str):
@@ -941,7 +941,7 @@ workflowEnd节点必须返回标准的API响应格式，包含：
          for key, value in configs.items():
              configs[key] = update_value(value)
      
-     def _fix_single_node_references(self, node: Dict[str, Any], actual_node_names: set) -> Dict[str, Any]:
+    def _fix_single_node_references(self, node: Dict[str, Any], actual_node_names: set) -> Dict[str, Any]:
         """修复单个节点的引用"""
         import re
         import copy
@@ -1011,30 +1011,30 @@ workflowEnd节点必须返回标准的API响应格式，包含：
         """找到最匹配的节点名称"""
         import difflib
         
-                 # 常见的节点名称映射（包含中文到英文的映射）
-         # 确保所有目标名称都以大写字母开头，采用PascalCase格式
-         common_mappings = {
-             # 英文到英文的映射
-             "StartNode": "StartProductInbound",
-             "ValidateSupplier": "QuerySupplier", 
-             "CheckProduct": "QueryProduct",
-             "GetProductInfo": "QueryProduct",
-             "CheckSupplier": "QuerySupplier",
-             "GetUserInfo": "QueryUser",
-             "StartProcess": "StartProductInbound",
-             "ValidateUser": "QueryUser",
-             "CheckUserExists": "QueryUser",
-             "GetSupplierInfo": "QuerySupplier",
-             "CreateProductRecord": "CreateProduct",
-             "UpdateProductRecord": "UpdateProduct",
-             "RecordStockMovement": "CreateStockMovement",
-             "NotifyWarehouseAdmin": "SendManagerNotification",
-             "NotifyAdmin": "SendManagerNotification",
-             "CheckProductInfo": "QueryProduct",
-             "CheckProductExists": "QueryProduct",
-             "ValidateProduct": "QueryProduct",
-             "EndProcess": "EndProductInbound",
-             "FinishProcess": "EndProductInbound",
+        # 常见的节点名称映射（包含中文到英文的映射）
+        # 确保所有目标名称都以大写字母开头，采用PascalCase格式
+        common_mappings = {
+            # 英文到英文的映射
+            "StartNode": "StartProductInbound",
+            "ValidateSupplier": "QuerySupplier", 
+            "CheckProduct": "QueryProduct",
+            "GetProductInfo": "QueryProduct",
+            "CheckSupplier": "QuerySupplier",
+            "GetUserInfo": "QueryUser",
+            "StartProcess": "StartProductInbound",
+            "ValidateUser": "QueryUser",
+            "CheckUserExists": "QueryUser",
+            "GetSupplierInfo": "QuerySupplier",
+            "CreateProductRecord": "CreateProduct",
+            "UpdateProductRecord": "UpdateProduct",
+            "RecordStockMovement": "CreateStockMovement",
+            "NotifyWarehouseAdmin": "SendManagerNotification",
+            "NotifyAdmin": "SendManagerNotification",
+            "CheckProductInfo": "QueryProduct",
+            "CheckProductExists": "QueryProduct",
+            "ValidateProduct": "QueryProduct",
+            "EndProcess": "EndProductInbound",
+            "FinishProcess": "EndProductInbound",
             
             # 中文到英文的映射
             "开始入库流程": "StartStockIn",
