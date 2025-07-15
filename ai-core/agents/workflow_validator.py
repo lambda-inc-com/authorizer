@@ -28,7 +28,7 @@ class WorkflowValidator(BaseAgent):
                 "valid_node_types": [
                     "workflowStart", "workflowEnd", "dbQuery", "dbCreate", "dbUpdate", 
                     "dbDelete", "transaction", "batch", "condition", "workflow", 
-                    "http", "llm", "code"
+                    "http", "chatWithLLM", "code"
                 ]
             },
             "business_rules": {
@@ -80,8 +80,8 @@ class WorkflowValidator(BaseAgent):
                 },
                 "condition": {
                     "required_configs": ["conditionGroups"],
-                    "nextNodes_rules": "can_be_empty",
-                    "no_outputs": True
+                    "no_outputs": True,
+                    "no_nextNodes": True
                 },
                 "workflow": {
                     "required_configs": ["workflowId", "inputMappings", "outputMappings"],
@@ -89,10 +89,10 @@ class WorkflowValidator(BaseAgent):
                 },
                 "http": {
                     "required_configs": ["method", "url"],
-                    "required_outputs": ["code", "data", "message"],
+                    "required_outputs": ["code", "data"],
                     "nextNodes_rules": "must_not_be_empty"
                 },
-                "llm": {
+                "chatWithLLM": {
                     "required_configs": ["modelId"],
                     "required_outputs": ["thinking", "response", "tokens"],
                     "nextNodes_rules": "must_not_be_empty"
@@ -274,12 +274,16 @@ class WorkflowValidator(BaseAgent):
         # 4. 可执行性验证
         executability_result = self._validate_executability(workflow)
         
+        # 5. 节点引用验证
+        reference_result = self._validate_node_references(workflow)
+        
         # 合并验证结果
         return self._merge_validation_results(
             structure_result,
             config_result,
             logic_result,
-            executability_result
+            executability_result,
+            reference_result
         )
     
     def _validate_structure(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
@@ -291,6 +295,12 @@ class WorkflowValidator(BaseAgent):
         for field in self.validation_rules["structure_rules"]["required_workflow_fields"]:
             if field not in workflow:
                 errors.append(f"工作流缺少必需字段: {field}")
+        
+        # 检查工作流名称是否使用英文
+        if "name" in workflow:
+            workflow_name = workflow["name"]
+            if not self._is_english_name(workflow_name):
+                errors.append(f"工作流名称 '{workflow_name}' 必须使用英文，采用PascalCase或camelCase格式")
         
         # 检查节点
         if "nodes" in workflow:
@@ -325,6 +335,12 @@ class WorkflowValidator(BaseAgent):
             if node["type"] not in self.validation_rules["structure_rules"]["valid_node_types"]:
                 errors.append(f"节点 {node.get('name', index)} 的类型 {node['type']} 无效")
         
+        # 检查节点名称是否使用英文
+        if "name" in node:
+            node_name = node["name"]
+            if not self._is_english_name(node_name):
+                errors.append(f"节点 {node_name} 的名称必须使用英文，采用PascalCase格式")
+        
         return errors
     
     def _validate_configuration(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
@@ -348,16 +364,19 @@ class WorkflowValidator(BaseAgent):
     
     def _validate_node(self, node: Dict[str, Any]) -> None:
         """验证单个节点"""
-        # 检查必需字段，但根据节点类型决定是否需要outputs
-        required_fields = ["name", "type", "desc", "inputs", "configs", "nextNodes"]
+        # 检查必需字段，但根据节点类型决定是否需要outputs和nextNodes
+        required_fields = ["name", "type", "desc", "inputs", "configs"]
         
         # 检查是否需要outputs字段
         node_type = node.get("type")
         rules = self.validation_rules["node_specific_rules"].get(node_type, {})
         needs_outputs = not rules.get("no_outputs", False)
+        needs_nextNodes = not rules.get("no_nextNodes", False)
         
         if needs_outputs:
             required_fields.append("outputs")
+        if needs_nextNodes:
+            required_fields.append("nextNodes")
         
         for field in required_fields:
             if field not in node:
@@ -440,6 +459,10 @@ class WorkflowValidator(BaseAgent):
         if node_type == "http":
             self._validate_http_node_config(node, errors, warnings)
         
+        # 检查条件节点特定配置
+        if node_type == "condition":
+            self._validate_condition_node_config(node, errors, warnings)
+        
         return errors, warnings
     
     def _validate_db_node_config(self, node: Dict[str, Any], errors: List[str], warnings: List[str]):
@@ -485,6 +508,74 @@ class WorkflowValidator(BaseAgent):
             if not isinstance(url, str) or not url.strip():
                 errors.append(f"节点 {node_name} 的url配置必须是非空字符串")
     
+    def _validate_condition_node_config(self, node: Dict[str, Any], errors: List[str], warnings: List[str]):
+        """验证条件节点配置"""
+        configs = node.get("configs", {})
+        node_name = node.get("name", "unknown")
+        
+        # 检查conditionGroups配置
+        if "conditionGroups" not in configs:
+            errors.append(f"节点 {node_name} 缺少conditionGroups配置")
+        elif not isinstance(configs["conditionGroups"], list):
+            errors.append(f"节点 {node_name} 的conditionGroups配置必须是数组")
+        elif not configs["conditionGroups"]:
+            warnings.append(f"节点 {node_name} 的conditionGroups配置为空")
+        else:
+            valid_operators = [
+                "equal", "notEqual", "greaterThan", "greaterThanEqual", 
+                "lessThan", "lessThanEqual", "isNull", "isNotNull", 
+                "include", "notInclude"
+            ]
+            
+            for group_index, group in enumerate(configs["conditionGroups"]):
+                # 检查条件组必需字段
+                if "conditions" not in group:
+                    errors.append(f"条件组 {group_index} 缺少conditions配置")
+                elif not isinstance(group["conditions"], list):
+                    errors.append(f"条件组 {group_index} 的conditions配置必须是数组")
+                elif not group["conditions"]:
+                    warnings.append(f"条件组 {group_index} 的conditions配置为空")
+                else:
+                    # 验证每个条件
+                    for condition_index, condition in enumerate(group["conditions"]):
+                        if "left" not in condition:
+                            errors.append(f"条件组 {group_index} 的条件 {condition_index} 缺少left配置")
+                        elif not isinstance(condition["left"], str):
+                            errors.append(f"条件组 {group_index} 的条件 {condition_index} 的left配置必须是字符串")
+                        
+                        if "operator" not in condition:
+                            errors.append(f"条件组 {group_index} 的条件 {condition_index} 缺少operator配置")
+                        elif condition["operator"] not in valid_operators:
+                            errors.append(f"条件组 {group_index} 的条件 {condition_index} 的operator配置无效，支持的操作符：{', '.join(valid_operators)}")
+                        
+                        if "right" not in condition:
+                            errors.append(f"条件组 {group_index} 的条件 {condition_index} 缺少right配置")
+                
+                if "relationship" not in group:
+                    errors.append(f"条件组 {group_index} 缺少relationship配置")
+                elif group["relationship"] not in ["AND", "OR"]:
+                    errors.append(f"条件组 {group_index} 的relationship配置必须是'AND'或'OR'")
+                
+                if "nextNode" not in group:
+                    errors.append(f"条件组 {group_index} 缺少nextNode配置")
+                elif not isinstance(group["nextNode"], str):
+                    errors.append(f"条件组 {group_index} 的nextNode配置必须是字符串")
+        
+        # 检查defaultNextNode配置（可选）
+        if "defaultNextNode" in configs:
+            if not isinstance(configs["defaultNextNode"], str):
+                errors.append(f"节点 {node_name} 的defaultNextNode配置必须是字符串")
+            elif not configs["defaultNextNode"].strip():
+                warnings.append(f"节点 {node_name} 的defaultNextNode配置为空字符串")
+        
+        # 检查条件节点不应该有nextNodes字段
+        if "nextNodes" in node:
+            errors.append(f"节点 {node_name} 不应该包含nextNodes字段，条件节点的流向由条件配置决定")
+        
+        # 检查条件节点不应该有outputs字段
+        if "outputs" in node:
+            errors.append(f"节点 {node_name} 不应该包含outputs字段，条件节点不产生数据输出")
+        
     def _validate_logic(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
         """验证工作流逻辑"""
         errors = []
@@ -645,8 +736,9 @@ class WorkflowValidator(BaseAgent):
         detailed_results = {}
         
         # 收集所有验证结果
+        category_names = ["structure_validation", "configuration_validation", "logic_validation", "executability_validation", "reference_validation"]
         for i, result in enumerate(results):
-            category_name = ["structure_validation", "configuration_validation", "logic_validation", "executability_validation"][i]
+            category_name = category_names[i] if i < len(category_names) else f"validation_{i}"
             detailed_results[category_name] = result
             
             # 收集错误和警告
@@ -667,4 +759,65 @@ class WorkflowValidator(BaseAgent):
             "detailed_results": detailed_results,
             "all_errors": all_errors,
             "all_warnings": all_warnings
-        } 
+        }
+    
+    def _is_english_name(self, name: str) -> bool:
+        """检查名称是否使用英文字符"""
+        import re
+        # 检查是否只包含英文字母、数字和下划线，并且不能以数字开头
+        return bool(re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', name))
+    
+    def _validate_node_references(self, workflow: Dict[str, Any]) -> Dict[str, Any]:
+        """验证节点引用的准确性"""
+        errors = []
+        warnings = []
+        
+        if "nodes" not in workflow:
+            return {"passed": False, "errors": ["工作流缺少nodes字段"], "warnings": []}
+        
+        # 收集所有节点名称
+        node_names = set()
+        for node in workflow["nodes"]:
+            if "name" in node:
+                node_names.add(node["name"])
+        
+        # 检查每个节点中的引用
+        for node in workflow["nodes"]:
+            node_name = node.get("name", "unknown")
+            
+            # 检查inputs中的引用
+            if "inputs" in node:
+                for input_name, input_config in node["inputs"].items():
+                    if "value" in input_config:
+                        ref_errors = self._check_reference_validity(input_config["value"], node_names, node_name, f"inputs.{input_name}")
+                        errors.extend(ref_errors)
+            
+            # 检查outputs中的引用
+            if "outputs" in node:
+                for output_name, output_config in node["outputs"].items():
+                    if "value" in output_config:
+                        ref_errors = self._check_reference_validity(output_config["value"], node_names, node_name, f"outputs.{output_name}")
+                        errors.extend(ref_errors)
+        
+        return {
+            "passed": len(errors) == 0,
+            "errors": errors,
+            "warnings": warnings
+        }
+    
+    def _check_reference_validity(self, value: str, node_names: set, current_node: str, field_path: str) -> List[str]:
+        """检查引用的有效性"""
+        errors = []
+        
+        if not isinstance(value, str):
+            return errors
+        
+        # 检查是否包含节点引用
+        import re
+        references = re.findall(r'\$\.([a-zA-Z][a-zA-Z0-9_]*)', value)
+        
+        for ref_node in references:
+            if ref_node not in node_names and ref_node != "currentItem" and ref_node != "currentIndex":
+                errors.append(f"节点 {current_node} 的字段 {field_path} 引用了不存在的节点: {ref_node}")
+        
+        return errors 

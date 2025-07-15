@@ -54,7 +54,7 @@ class WorkflowComposer(BaseAgent):
                         }
                     },
                     "configs": {},
-                    "nextNodes": ["end"]
+                    "nextNodes": []
                 }
             },
             "dbQuery": {
@@ -227,10 +227,8 @@ class WorkflowComposer(BaseAgent):
                     "inputs": {},
                     "configs": {
                         "conditionGroups": [],
-                        "groupRelationship": "AND",
                         "defaultNextNode": ""
-                    },
-                    "nextNodes": []
+                    }
                 }
             },
             "workflow": {
@@ -280,10 +278,6 @@ class WorkflowComposer(BaseAgent):
                         "data": {
                             "type": "object",
                             "desc": "响应数据"
-                        },
-                        "message": {
-                            "type": "string",
-                            "desc": "响应消息"
                         }
                     },
                     "configs": {
@@ -299,10 +293,10 @@ class WorkflowComposer(BaseAgent):
                     "nextNodes": []
                 }
             },
-            "llm": {
+            "chatWithLLM": {
                 "template": {
                     "name": "LLMChat",
-                    "type": "llm",
+                    "type": "chatWithLLM",
                     "desc": "LLM对话节点，与大型语言模型进行交互",
                     "inputs": {},
                     "outputs": {
@@ -374,7 +368,7 @@ class WorkflowComposer(BaseAgent):
 - **condition**: 条件判断节点（决定执行路径）
 - **workflow**: 工作流节点（调用其他工作流）
 - **http**: HTTP请求节点（调用外部API）
-- **llm**: LLM对话节点（与AI模型交互）
+- **chatWithLLM**: LLM对话节点（与AI模型交互）
 - **code**: 代码执行节点（执行JavaScript代码）
 
 ## 核心原则
@@ -393,7 +387,7 @@ class WorkflowComposer(BaseAgent):
 - 每个节点（除condition外）必须指定nextNodes
 - workflowStart必须作为第一个节点
 - workflowEnd必须作为最后一个节点，nextNodes为["end"]
-- 条件节点通过内部配置决定流向
+- 条件节点不设置nextNodes字段，流向由条件配置决定
 
 ## workflowEnd节点要求
 workflowEnd节点必须返回标准的API响应格式，包含：
@@ -406,12 +400,12 @@ workflowEnd节点必须返回标准的API响应格式，包含：
 ```json
 {
   "workflow": {
-    "name": "工作流名称",
+    "name": "WorkflowName",
     "description": "工作流描述",
     "version": "1.0.0",
     "nodes": [
       {
-        "name": "节点名称",
+        "name": "NodeName",
         "type": "节点类型",
         "desc": "节点描述",
         "inputs": {
@@ -431,7 +425,7 @@ workflowEnd节点必须返回标准的API响应格式，包含：
         "configs": {
           "配置项": "配置值"
         },
-        "nextNodes": ["下一个节点名称"]
+        "nextNodes": ["NextNodeName"]
       }
     ]
   },
@@ -443,8 +437,15 @@ workflowEnd节点必须返回标准的API响应格式，包含：
 }
 ```
 
+## 特别注意
+- condition节点不包含nextNodes字段
+- condition节点不包含outputs字段
+- 其他节点类型必须包含nextNodes字段
+
 ## 注意事项
-- 节点名称必须唯一且使用PascalCase
+- 工作流名称必须使用英文，采用PascalCase或camelCase格式
+- 节点名称必须唯一且使用英文PascalCase命名，如: "QuerySupplier", "CreateUser"
+- 数据引用必须使用实际存在的节点名称，禁止使用虚构节点名称
 - 必须为每个节点提供合适的inputs和outputs
 - 数据库操作节点必须指定table和sql
 - HTTP节点必须指定method和url
@@ -551,33 +552,152 @@ workflowEnd节点必须返回标准的API响应格式，包含：
         
         # 基础工作流结构
         workflow = {
-            "name": self._generate_workflow_name(user_requirement),
+            "name": await self._generate_workflow_name(user_requirement),
             "description": f"根据用户需求自动生成的工作流: {user_requirement}",
             "version": "1.0.0",
-            "nodes": [],
-            "edges": []
+            "nodes": []
         }
         
         # 处理节点连接关系
         processed_nodes = self._process_node_connections(node_configs)
         
+        # 修复节点引用
+        processed_nodes = self._fix_node_references(processed_nodes)
+        
         # 添加节点到工作流
         workflow["nodes"] = processed_nodes
-        
-        # 生成边关系
-        workflow["edges"] = self._generate_edges(processed_nodes)
         
         logger.info(f"成功组合工作流，包含 {len(processed_nodes)} 个节点")
         
         return workflow
     
-    def _generate_workflow_name(self, user_requirement: str) -> str:
-        """生成工作流名称"""
-        # 简单的名称生成逻辑，可以根据需要优化
+    async def _generate_workflow_name(self, user_requirement: str) -> str:
+        """生成工作流名称 - 交由大模型生成英文名称"""
+        try:
+            # 构建提示词
+            prompt = f"""请根据用户需求生成一个简洁且有意义的英文工作流名称。
+
+用户需求：
+{user_requirement}
+
+要求：
+1. 名称必须是英文
+2. 使用PascalCase格式（首字母大写的驼峰命名）
+3. 名称应该准确反映工作流的主要功能
+4. 长度控制在50个字符以内
+5. 必须以"Workflow"结尾
+6. 避免使用特殊字符，只使用字母和数字
+
+示例：
+- 用户注册流程 → UserRegistrationWorkflow
+- 商品入库管理 → ProductInboundManagementWorkflow
+- 订单支付处理 → OrderPaymentProcessingWorkflow
+
+请直接返回工作流名称，不要包含任何其他文字或解释。"""
+
+            # 调用LLM生成工作流名称
+            response = await self.llm_client.chat_completion(
+                [{"role": "user", "content": prompt}],
+                max_tokens=100,
+                temperature=0.1  # 使用较低温度确保结果稳定
+            )
+            
+            # 清理和验证生成的名称
+            workflow_name = response.strip()
+            
+            # 移除可能的引号或其他包装字符
+            workflow_name = workflow_name.strip('"\'`')
+            
+            # 验证名称格式
+            if self._is_valid_workflow_name(workflow_name):
+                logger.info(f"LLM生成的工作流名称: {workflow_name}")
+                return workflow_name
+            else:
+                logger.warning(f"LLM生成的工作流名称格式无效: {workflow_name}，使用备用名称")
+                return self._generate_fallback_workflow_name(user_requirement)
+                
+        except Exception as e:
+            logger.error(f"LLM生成工作流名称失败: {str(e)}，使用备用名称")
+            return self._generate_fallback_workflow_name(user_requirement)
+    
+    def _is_valid_workflow_name(self, name: str) -> bool:
+        """验证工作流名称是否有效"""
         import re
-        name = re.sub(r'[^\w\s]', '', user_requirement)
-        name = re.sub(r'\s+', '_', name.strip())
-        return f"Workflow_{name[:50]}" if name else "AutoGeneratedWorkflow"
+        
+        # 检查基本格式
+        if not name or len(name) > 50:
+            return False
+            
+        # 检查是否以Workflow结尾
+        if not name.endswith("Workflow"):
+            return False
+            
+        # 检查是否只包含字母和数字
+        if not re.match(r'^[A-Za-z][A-Za-z0-9]*Workflow$', name):
+            return False
+            
+        # 检查是否是PascalCase格式
+        if not name[0].isupper():
+            return False
+            
+        return True
+    
+    def _generate_fallback_workflow_name(self, user_requirement: str) -> str:
+        """生成备用工作流名称"""
+        import re
+        import hashlib
+        
+        # 定义关键词到英文名称的映射
+        keyword_mapping = {
+            "用户": "User",
+            "注册": "Registration", 
+            "登录": "Login",
+            "商品": "Product",
+            "入库": "Inbound",
+            "出库": "Outbound",
+            "库存": "Inventory",
+            "订单": "Order",
+            "支付": "Payment",
+            "查询": "Query",
+            "创建": "Create",
+            "更新": "Update",
+            "删除": "Delete",
+            "验证": "Validate",
+            "检查": "Check",
+            "发送": "Send",
+            "通知": "Notification",
+            "审核": "Audit",
+            "流程": "Process",
+            "管理": "Management",
+            "供应商": "Supplier",
+            "数据": "Data",
+            "信息": "Info",
+            "系统": "System",
+            "操作": "Operation",
+            "处理": "Process",
+            "批量": "Batch"
+        }
+        
+        # 提取关键词并转换为英文
+        english_keywords = []
+        for chinese_keyword, english_keyword in keyword_mapping.items():
+            if chinese_keyword in user_requirement:
+                if english_keyword not in english_keywords:
+                    english_keywords.append(english_keyword)
+        
+        # 如果没有找到关键词，使用通用名称
+        if not english_keywords:
+            # 使用需求的hash值生成唯一标识
+            hash_value = hashlib.md5(user_requirement.encode()).hexdigest()[:8]
+            return f"Generated{hash_value.upper()}Workflow"
+        
+        # 限制关键词数量，最多3个
+        english_keywords = english_keywords[:3]
+        
+        # 生成工作流名称
+        workflow_name = "".join(english_keywords) + "Workflow"
+        
+        return workflow_name
     
     def _process_node_connections(self, node_configs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """处理节点连接关系"""
@@ -652,11 +772,12 @@ workflowEnd节点必须返回标准的API响应格式，包含：
         
         # 添加中间节点
         for i, node in enumerate(other_nodes):
-            # 确保每个节点有正确的nextNodes设置
-            if i < len(other_nodes) - 1:
-                node["nextNodes"] = [other_nodes[i + 1]["name"]]
-            else:
-                node["nextNodes"] = [end_node["name"]]
+            # 确保每个节点有正确的nextNodes设置（条件节点除外）
+            if node.get("type") != "condition":
+                if i < len(other_nodes) - 1:
+                    node["nextNodes"] = [other_nodes[i + 1]["name"]]
+                else:
+                    node["nextNodes"] = [end_node["name"]]
             processed_nodes.append(node)
         
         # 设置开始节点的连接
@@ -670,19 +791,218 @@ workflowEnd节点必须返回标准的API响应格式，包含：
         
         return processed_nodes
     
-    def _generate_edges(self, nodes: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-        """生成边关系"""
-        edges = []
+    def _fix_node_references(self, nodes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """修复节点引用错误"""
+        logger.info("开始修复节点引用...")
         
+        # 收集所有节点的实际名称
+        actual_node_names = set()
         for node in nodes:
-            for next_node_name in node.get("nextNodes", []):
-                if next_node_name != "end":
-                    edges.append({
-                        "source": node["name"],
-                        "target": next_node_name
-                    })
+            actual_node_names.add(node.get("name", ""))
         
-        return edges
+        logger.info(f"实际节点名称: {actual_node_names}")
+        
+        # 修复每个节点的引用
+        fixed_nodes = []
+        for node in nodes:
+            fixed_node = self._fix_single_node_references(node, actual_node_names)
+            fixed_nodes.append(fixed_node)
+        
+        logger.info("节点引用修复完成")
+        return fixed_nodes
+    
+    def _fix_single_node_references(self, node: Dict[str, Any], actual_node_names: set) -> Dict[str, Any]:
+        """修复单个节点的引用"""
+        import re
+        import copy
+        
+        # 深拷贝节点避免修改原始数据
+        fixed_node = copy.deepcopy(node)
+        
+        # 修复inputs中的引用
+        if "inputs" in fixed_node:
+            for input_name, input_config in fixed_node["inputs"].items():
+                if isinstance(input_config, dict) and "value" in input_config:
+                    original_value = input_config["value"]
+                    fixed_value = self._fix_reference_string(original_value, actual_node_names)
+                    if fixed_value != original_value:
+                        logger.info(f"修复节点 {node.get('name')} 输入 {input_name} 引用: {original_value} -> {fixed_value}")
+                        input_config["value"] = fixed_value
+        
+        # 修复outputs中的引用
+        if "outputs" in fixed_node:
+            for output_name, output_config in fixed_node["outputs"].items():
+                if isinstance(output_config, dict) and "value" in output_config:
+                    original_value = output_config["value"]
+                    fixed_value = self._fix_reference_string(original_value, actual_node_names)
+                    if fixed_value != original_value:
+                        logger.info(f"修复节点 {node.get('name')} 输出 {output_name} 引用: {original_value} -> {fixed_value}")
+                        output_config["value"] = fixed_value
+        
+        # 修复configs中的引用
+        if "configs" in fixed_node:
+            fixed_node["configs"] = self._fix_config_references(fixed_node["configs"], actual_node_names)
+        
+        return fixed_node
+    
+    def _fix_reference_string(self, value: str, actual_node_names: set) -> str:
+        """修复引用字符串中的节点名称"""
+        import re
+        
+        if not isinstance(value, str):
+            return value
+        
+        # 查找所有节点引用模式 $.NodeName.xxx (支持中文和英文)
+        pattern = r'\$\.([a-zA-Z\u4e00-\u9fff][a-zA-Z0-9_\u4e00-\u9fff]*)'
+        matches = re.findall(pattern, value)
+        
+        fixed_value = value
+        for referenced_node in matches:
+            # 跳过特殊引用
+            if referenced_node in ["currentItem", "currentIndex", "context"]:
+                continue
+            
+            # 检查引用的节点是否存在
+            if referenced_node not in actual_node_names:
+                # 尝试找到最相似的节点名称
+                best_match = self._find_best_node_match(referenced_node, actual_node_names)
+                if best_match:
+                    # 替换引用
+                    old_ref = f"$.{referenced_node}"
+                    new_ref = f"$.{best_match}"
+                    fixed_value = fixed_value.replace(old_ref, new_ref)
+                    logger.info(f"修复节点引用: {old_ref} -> {new_ref}")
+                else:
+                    logger.warning(f"无法找到匹配的节点名称: {referenced_node}")
+        
+        return fixed_value
+    
+    def _find_best_node_match(self, target_name: str, actual_node_names: set) -> str:
+        """找到最匹配的节点名称"""
+        import difflib
+        
+        # 常见的节点名称映射（包含中文到英文的映射）
+        common_mappings = {
+            # 英文到英文的映射
+            "StartNode": "StartProductInbound",
+            "ValidateSupplier": "QuerySupplier",
+            "CheckProduct": "QueryProduct",
+            "GetProductInfo": "QueryProduct",
+            "CheckSupplier": "QuerySupplier",
+            "GetUserInfo": "QueryUser",
+            "StartProcess": "StartProductInbound",
+            "ValidateUser": "QueryUser",
+            "CheckUserExists": "QueryUser",
+            "GetSupplierInfo": "QuerySupplier",
+            "CreateProductRecord": "CreateProduct",
+            "UpdateProductRecord": "UpdateProduct",
+            "RecordStockMovement": "CreateStockMovement",
+            "NotifyWarehouseAdmin": "SendManagerNotification",
+            "NotifyAdmin": "SendManagerNotification",
+            "CheckProductInfo": "QueryProduct",
+            "CheckProductExists": "QueryProduct",
+            "ValidateProduct": "QueryProduct",
+            "EndProcess": "EndProductInbound",
+            "FinishProcess": "EndProductInbound",
+            
+            # 中文到英文的映射
+            "开始入库流程": "StartStockIn",
+            "验证供应商": "QuerySupplier",
+            "供应商存在判断": "CheckSupplierExists",
+            "检查商品信息": "QueryProduct", 
+            "商品存在判断": "CheckProductExists",
+            "创建新商品": "CreateProduct",
+            "库存事务处理": "StockUpdateTransaction",
+            "更新库存": "UpdateInventory",
+            "记录库存变动": "CreateStockMovement",
+            "检查大量入库": "CheckLargeQuantity",
+            "发送通知": "SendNotification",
+            "结束入库流程": "EndStockIn",
+            
+            # 更多通用的中文映射
+            "开始流程": "StartProcess",
+            "开始节点": "StartNode",
+            "结束流程": "EndProcess",
+            "结束节点": "EndNode",
+            "用户验证": "ValidateUser",
+            "用户查询": "QueryUser",
+            "用户创建": "CreateUser",
+            "用户更新": "UpdateUser",
+            "用户删除": "DeleteUser",
+            "商品查询": "QueryProduct",
+            "商品创建": "CreateProduct",
+            "商品更新": "UpdateProduct",
+            "商品删除": "DeleteProduct",
+            "库存查询": "QueryInventory",
+            "库存更新": "UpdateInventory",
+            "订单查询": "QueryOrder",
+            "订单创建": "CreateOrder",
+            "订单更新": "UpdateOrder",
+            "支付处理": "ProcessPayment",
+            "发送邮件": "SendEmail",
+            "发送短信": "SendSMS",
+            "条件判断": "CheckCondition",
+            "数据验证": "ValidateData",
+            "文件上传": "UploadFile",
+            "文件下载": "DownloadFile",
+            "数据导入": "ImportData",
+            "数据导出": "ExportData",
+            "状态检查": "CheckStatus",
+            "权限验证": "ValidatePermission",
+            "日志记录": "LogRecord",
+            "通知发送": "SendNotification",
+            "审核流程": "AuditProcess",
+            "批量处理": "BatchProcess",
+            "定时任务": "ScheduledTask",
+            "数据同步": "SyncData",
+            "缓存更新": "UpdateCache",
+            "监控检查": "MonitorCheck",
+            "报告生成": "GenerateReport",
+            "统计分析": "StatisticsAnalysis",
+            "配置更新": "UpdateConfig",
+            "系统初始化": "SystemInit",
+            "清理任务": "CleanupTask"
+        }
+        
+        # 首先检查预定义的映射
+        if target_name in common_mappings:
+            mapped_name = common_mappings[target_name]
+            if mapped_name in actual_node_names:
+                return mapped_name
+        
+        # 使用字符串相似度找到最匹配的节点
+        best_match = None
+        best_ratio = 0.0
+        
+        for actual_name in actual_node_names:
+            # 计算相似度
+            ratio = difflib.SequenceMatcher(None, target_name.lower(), actual_name.lower()).ratio()
+            if ratio > best_ratio and ratio > 0.5:  # 至少50%相似度
+                best_ratio = ratio
+                best_match = actual_name
+        
+        return best_match
+    
+    def _fix_config_references(self, configs: dict, actual_node_names: set) -> dict:
+        """修复配置中的引用"""
+        import copy
+        
+        fixed_configs = copy.deepcopy(configs)
+        
+        # 递归处理所有配置值
+        def fix_value(obj):
+            if isinstance(obj, str):
+                return self._fix_reference_string(obj, actual_node_names)
+            elif isinstance(obj, dict):
+                for key, value in obj.items():
+                    obj[key] = fix_value(value)
+                return obj
+            elif isinstance(obj, list):
+                return [fix_value(item) for item in obj]
+            else:
+                return obj
+        
+        return fix_value(fixed_configs)
     
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """解析LLM响应"""
@@ -737,12 +1057,12 @@ workflowEnd节点必须返回标准的API响应格式，包含：
     
     def _validate_node(self, node: Dict[str, Any]) -> None:
         """验证单个节点"""
-        # 检查必需字段，但根据节点类型决定是否需要outputs
-        required_fields = ["name", "type", "desc", "inputs", "configs", "nextNodes"]
+        # 检查必需字段，但根据节点类型决定是否需要outputs和nextNodes
+        required_fields = ["name", "type", "desc", "inputs", "configs"]
         
-        # condition节点不需要outputs字段
+        # condition节点不需要outputs和nextNodes字段
         if node.get("type") != "condition":
-            required_fields.append("outputs")
+            required_fields.extend(["outputs", "nextNodes"])
         
         for field in required_fields:
             if field not in node:
@@ -752,9 +1072,12 @@ workflowEnd节点必须返回标准的API响应格式，包含：
         if node["type"] not in self.node_templates:
             raise ValueError(f"不支持的节点类型: {node['type']}")
             
-        # 特殊验证：condition节点不应该有outputs字段
-        if node.get("type") == "condition" and "outputs" in node:
-            raise ValueError(f"condition节点 {node.get('name')} 不应该包含outputs字段")
+        # 特殊验证：condition节点不应该有outputs和nextNodes字段
+        if node.get("type") == "condition":
+            if "outputs" in node:
+                raise ValueError(f"condition节点 {node.get('name')} 不应该包含outputs字段")
+            if "nextNodes" in node:
+                raise ValueError(f"condition节点 {node.get('name')} 不应该包含nextNodes字段")
     
     def _validate_node_connections(self, nodes: List[Dict[str, Any]]) -> None:
         """验证节点连接关系"""
@@ -775,6 +1098,9 @@ workflowEnd节点必须返回标准的API响应格式，包含：
             if node["type"] == "workflowEnd":
                 if node["nextNodes"] != ["end"]:
                     raise ValueError("workflowEnd节点的nextNodes必须是['end']")
+            elif node["type"] == "condition":
+                # 条件节点不包含nextNodes字段，跳过验证
+                continue
             else:
                 for next_node in node["nextNodes"]:
                     if next_node != "end" and next_node not in node_names:

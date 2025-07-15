@@ -68,7 +68,7 @@ class RequirementAnalyzer(BaseAgent):
                 "usage": "当需要调用外部API或服务时使用",
                 "scenarios": ["调用第三方API", "发送通知", "数据同步", "外部验证"]
             },
-            "llm": {
+            "chatWithLLM": {
                 "description": "LLM对话节点，用于与大型语言模型进行交互",
                 "usage": "当需要AI处理文本、生成内容或智能分析时使用",
                 "scenarios": ["文本生成", "内容摘要", "智能分析", "自动回复"]
@@ -147,7 +147,7 @@ class RequirementAnalyzer(BaseAgent):
                 elif 'HTTP请求节点' in title or 'HTTP Request Node' in title:
                     templates['http'] = self._extract_section_content(section, 'http')
                 elif 'LLM对话节点' in title or 'LLM Node' in title:
-                    templates['llm'] = self._extract_section_content(section, 'llm')
+                    templates['chatWithLLM'] = self._extract_section_content(section, 'chatWithLLM')
             
             logger.info(f"成功从dsl.md加载了 {len(templates)} 个节点模板")
             return templates
@@ -178,7 +178,7 @@ class RequirementAnalyzer(BaseAgent):
             "workflow": "# 工作流节点\n基本工作流节点模板",
             "code": "# 代码执行节点\n基本代码执行节点模板",
             "http": "# HTTP请求节点\n基本HTTP请求节点模板",
-            "llm": "# LLM对话节点\n基本LLM对话节点模板"
+            "chatWithLLM": "# LLM对话节点\n基本LLM对话节点模板"
         }
     
     async def process_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -252,10 +252,12 @@ class RequirementAnalyzer(BaseAgent):
 - **dbUpdate**: 数据库更新节点
 - **dbDelete**: 数据库删除节点
 - **http**: HTTP请求节点
-- **llm**: LLM对话节点
+- **chatWithLLM**: LLM对话节点
 - **condition**: 条件判断节点
 - **code**: 代码执行节点
 - **transaction**: 数据库事务节点
+- **batch**: 批量处理节点
+- **workflow**: 工作流节点
 
 ## 输出格式
 请严格按照以下JSON格式输出：
@@ -365,7 +367,7 @@ class RequirementAnalyzer(BaseAgent):
         elif node_type == "workflowEnd":
             special_requirements = """
 ## ⚠️ workflowEnd节点特殊要求 ⚠️
-1. **nextNodes必须设置为["end"]** - 这是强制要求！
+1. **nextNodes必须设置为空数组[]** - 因为这是工作流的终点！
 2. **configs设置为空对象{}** - 此节点类型无需特殊配置
 3. **必须包含标准API响应字段**：
    - code: HTTP状态码（数字类型）
@@ -411,7 +413,7 @@ class RequirementAnalyzer(BaseAgent):
 2. **outputs字段已固定**，不需要设置value字段：
    - code: HTTP状态码（数字类型）
    - data: 响应数据（对象类型）"""
-        elif node_type == "llm":
+        elif node_type == "chatWithLLM":
             special_requirements = """
 ## ⚠️ LLM节点特殊要求 ⚠️
 1. **configs必须包含**：
@@ -425,8 +427,17 @@ class RequirementAnalyzer(BaseAgent):
 ## ⚠️ Condition节点特殊要求 ⚠️
 1. **configs必须包含**：
    - conditionGroups: 条件组配置（数组）
-2. **nextNodes保持为空数组[]** - 流向由条件配置决定
-3. **无outputs字段** - 条件节点不产生数据输出"""
+   - defaultNextNode: 默认跳转节点（字符串，可选）
+2. **不需要nextNodes字段** - 条件节点不设置nextNodes数组，流向由条件配置决定
+3. **不需要outputs字段** - 条件节点不产生数据输出
+4. **条件组配置要求**：
+   - conditions: 单个条件组内的条件列表
+   - relationship: 条件组内的逻辑关系 (AND/OR)
+   - nextNode: 条件满足时跳转的节点ID
+5. **支持的操作符**：
+   - equal, notEqual, greaterThan, greaterThanEqual, lessThan, lessThanEqual
+   - isNull, isNotNull, include, notInclude
+6. **变量引用格式**：使用`$.节点名.inputs.字段名`格式引用数据"""
         elif node_type == "batch":
             special_requirements = """
 ## ⚠️ Batch节点特殊要求 ⚠️
@@ -439,8 +450,27 @@ class RequirementAnalyzer(BaseAgent):
             special_requirements = """
 ## ⚠️ Transaction节点特殊要求 ⚠️
 1. **configs必须包含**：
-   - children: 子节点数组（每个子节点包含完整配置和order字段）
-2. **outputs字段已固定**，不需要设置value字段"""
+   - isolation: 事务隔离级别（可选，默认READ_COMMITTED）
+   - timeout: 事务超时时间（可选，默认60秒）
+   - children: 子节点数组（必填，每个子节点包含完整配置和order字段）
+2. **outputs字段已固定**，不需要设置value字段：
+   - committed: 事务是否成功提交（布尔类型）
+   - affectedTotal: 事务中所有操作影响的总行数（数字类型）
+   - childResults: 所有子节点的执行结果数组（数组类型）
+   - executionTime: 事务执行耗时（数字类型）
+3. **子节点配置要求**：
+   - name: 子节点名称（必填）
+   - type: 节点类型（必填，只支持dbCreate、dbUpdate、dbDelete）
+   - desc: 节点描述（必填）
+   - order: 执行顺序（必填，从1开始）
+   - inputs: 节点输入参数（可选）
+   - outputs: 节点输出参数（必填）
+   - configs: 节点配置（必填，包含table和sql）
+4. **重要提示**：
+   - 子节点的order必须唯一且连续，从1开始
+   - 子节点间可以通过$.节点名.inputs.字段名引用事务节点的输入参数
+   - 避免生成过多的子节点，建议不超过4个子节点
+   - 确保JSON格式正确，避免截断"""
         
         base_prompt = f"""# {node_type.upper()} 节点生成专家
 
@@ -468,13 +498,15 @@ class RequirementAnalyzer(BaseAgent):
 3. **实用性**: 配置能够在实际业务场景中正常工作
 4. **一致性**: 字段名和数据引用必须准确
 5. **描述性**: 节点名称和描述要清晰明确
+6. **英文命名**: 节点名称必须使用英文，采用PascalCase格式，如: "QuerySupplier", "CreateUser"
+7. **引用准确性**: 所有数据引用必须使用实际存在的节点名称，禁止使用虚构的节点名称
 
 ## 输出格式
 请直接输出完整的JSON节点配置，不要包含任何额外的说明文字：
 
 ```json
 {{
-  "name": "节点名称",
+  "name": "NodeName",
   "type": "{node_type}",
   "desc": "节点描述",
   "inputs": {{}},
@@ -484,57 +516,353 @@ class RequirementAnalyzer(BaseAgent):
 }}
 ```
 
-请确保输出的JSON格式完全正确，可以直接解析使用。"""
+请确保输出的JSON格式完全正确，可以直接解析使用。
+**特别注意**: 节点名称必须使用英文，采用PascalCase格式，如 "QuerySupplier", "CreateUser"。"""
         
         return base_prompt
     
-    async def _generate_individual_nodes(self, node_prompts: List[Dict[str, Any]], 
-                                       user_requirement: str) -> List[Dict[str, Any]]:
-        """第三阶段: 逐个生成节点配置"""
-        
+    async def _generate_individual_nodes(self, node_prompts: List[Dict[str, Any]], user_requirement: str) -> List[Dict[str, Any]]:
+        """逐个生成节点配置"""
         generated_nodes = []
         
+        # 收集所有节点的建议名称，用于引用验证
+        all_node_names = []
         for prompt_info in node_prompts:
+            node_info = prompt_info.get("node_info", {})
+            suggested_name = node_info.get("suggested_name", "")
+            if suggested_name:
+                all_node_names.append(suggested_name)
+        
+        logger.info(f"所有节点的建议名称: {all_node_names}")
+        
+        for i, prompt_info in enumerate(node_prompts):
+            node_type = prompt_info["node_type"]
+            node_prompt = prompt_info["generation_prompt"]
+            
+            # 在提示词中添加节点名称上下文
+            enhanced_prompt = self._enhance_prompt_with_node_context(node_prompt, all_node_names, i)
+            
+            logger.info(f"生成节点 {i+1}/{len(node_prompts)}: {node_type}")
+            
             try:
-                logger.info(f"生成节点: {prompt_info['node_type']} - {prompt_info['node_info']['suggested_name']}")
-                
-                # 使用专门的提示词生成节点
-                messages = [
-                    {"role": "user", "content": prompt_info["generation_prompt"]}
-                ]
-                
+                # 调用LLM生成节点配置
                 response = await self.llm_client.chat_completion(
-                    messages=messages,
-                    temperature=0.2,  # 较低的温度以确保准确性
-                    max_tokens=1500
+                    [{"role": "user", "content": enhanced_prompt}],
+                    max_tokens=self._get_max_tokens_for_node_type(node_type),
+                    temperature=0.1
                 )
                 
-                # 解析生成的节点配置
+                # 解析响应
                 node_config = self._parse_node_response(response)
                 
                 # 验证节点配置
-                validated_node = self._validate_node_config(node_config, prompt_info['node_type'])
+                validated_config = self._validate_node_config(node_config, node_type)
                 
+                # 添加到结果中
                 generated_nodes.append({
-                    "node_config": validated_node,
-                    "generation_info": prompt_info['node_info'],
-                    "node_type": prompt_info['node_type']
+                    "node_type": node_type,
+                    "node_config": validated_config,
+                    "generation_info": {
+                        "prompt_used": enhanced_prompt,
+                        "raw_response": response,
+                        "validation_applied": True
+                    }
                 })
                 
-                logger.info(f"成功生成节点: {validated_node['name']}")
-            
+                logger.info(f"成功生成节点: {validated_config.get('name', 'unknown')}")
+                
             except Exception as e:
-                logger.error(f"生成节点 {prompt_info['node_type']} 失败: {str(e)}")
-                # 生成一个基础的节点配置作为后备
-                fallback_node = self._create_fallback_node(prompt_info['node_type'], prompt_info['node_info'])
+                logger.error(f"生成节点 {node_type} 失败: {str(e)}")
+                # 生成默认节点配置
+                default_config = self._generate_default_node_config(node_type)
                 generated_nodes.append({
-                    "node_config": fallback_node,
-                    "generation_info": prompt_info['node_info'],
-                    "node_type": prompt_info['node_type'],
-                    "is_fallback": True
+                    "node_type": node_type,
+                    "node_config": default_config,
+                    "generation_info": {
+                        "error": str(e),
+                        "is_default": True
+                    }
                 })
         
         return generated_nodes
+    
+    def _enhance_prompt_with_node_context(self, base_prompt: str, all_node_names: List[str], current_index: int) -> str:
+        """增强提示词，添加节点名称上下文"""
+        
+        # 获取前面已生成的节点名称
+        previous_node_names = all_node_names[:current_index]
+        remaining_node_names = all_node_names[current_index:]
+        
+        context_info = f"""
+## 节点名称上下文
+
+**已生成的节点名称**:
+{', '.join(previous_node_names) if previous_node_names else '无'}
+
+**当前和后续节点名称**:
+{', '.join(remaining_node_names) if remaining_node_names else '无'}
+
+**数据引用要求**:
+- 只能引用已生成的节点名称: {', '.join(previous_node_names) if previous_node_names else '无'}
+- 必须使用完整的节点名称，不能使用简化或虚构的名称
+- 如果是第一个节点，可以使用 workflowStart 节点作为数据源
+- 引用格式: $.NodeName.outputs.fieldName 或 $.NodeName.inputs.fieldName
+
+**特别注意**:
+- 禁止使用不存在的节点名称，如 "StartNode", "ValidateSupplier", "CheckProduct" 等
+- 必须使用建议的节点名称，确保引用的准确性
+- 如果需要引用其他节点的数据，请使用上述 "已生成的节点名称" 中的名称
+"""
+        
+        # 将上下文信息添加到基础提示词中
+        enhanced_prompt = base_prompt + context_info
+        
+        return enhanced_prompt
+    
+    def _get_max_tokens_for_node_type(self, node_type: str) -> int:
+        """根据节点类型获取最大token数"""
+        token_limits = {
+            "transaction": 3000,  # 事务节点需要更多tokens
+            "batch": 2500,        # 批处理节点需要更多tokens
+            "chatWithLLM": 2000,  # LLM节点需要更多tokens
+            "code": 2000,         # 代码节点需要更多tokens
+            "condition": 1500,    # 条件节点
+            "http": 1500,         # HTTP节点
+            "workflow": 1500,     # 工作流节点
+            "dbQuery": 1500,      # 数据库查询节点
+            "dbCreate": 1500,     # 数据库创建节点
+            "dbUpdate": 1500,     # 数据库更新节点
+            "dbDelete": 1500,     # 数据库删除节点
+            "workflowStart": 1000,  # 开始节点
+            "workflowEnd": 1000,    # 结束节点
+        }
+        
+        return token_limits.get(node_type, 1500)  # 默认1500 tokens
+    
+    def _generate_default_node_config(self, node_type: str) -> Dict[str, Any]:
+        """生成默认节点配置"""
+        default_configs = {
+            "workflowStart": {
+                "name": "WorkflowStart",
+                "type": "workflowStart",
+                "desc": "工作流开始节点",
+                "inputs": {},
+                "outputs": {},
+                "configs": {},
+                "nextNodes": []
+            },
+            "workflowEnd": {
+                "name": "WorkflowEnd",
+                "type": "workflowEnd",
+                "desc": "工作流结束节点",
+                "inputs": {},
+                "outputs": {
+                    "code": {"type": "number", "desc": "HTTP状态码"},
+                    "data": {"type": "object", "desc": "响应数据"},
+                    "message": {"type": "string", "desc": "响应消息"}
+                },
+                "configs": {},
+                "nextNodes": ["end"]
+            },
+            "dbQuery": {
+                "name": "QueryData",
+                "type": "dbQuery",
+                "desc": "数据库查询节点",
+                "inputs": {},
+                "outputs": {
+                    "affected": {"type": "number", "desc": "影响的行数"},
+                    "data": {"type": "array", "desc": "查询结果数据"}
+                },
+                "configs": {
+                    "table": "table_name",
+                    "sql": "SELECT * FROM table_name"
+                },
+                "nextNodes": []
+            },
+            "dbCreate": {
+                "name": "CreateData",
+                "type": "dbCreate",
+                "desc": "数据库创建节点",
+                "inputs": {},
+                "outputs": {
+                    "affected": {"type": "number", "desc": "影响的行数"},
+                    "insertId": {"type": "string", "desc": "插入的ID"}
+                },
+                "configs": {
+                    "table": "table_name",
+                    "sql": "INSERT INTO table_name VALUES (...)"
+                },
+                "nextNodes": []
+            },
+            "dbUpdate": {
+                "name": "UpdateData",
+                "type": "dbUpdate",
+                "desc": "数据库更新节点",
+                "inputs": {},
+                "outputs": {
+                    "affected": {"type": "number", "desc": "影响的行数"}
+                },
+                "configs": {
+                    "table": "table_name",
+                    "sql": "UPDATE table_name SET ..."
+                },
+                "nextNodes": []
+            },
+            "dbDelete": {
+                "name": "DeleteData",
+                "type": "dbDelete",
+                "desc": "数据库删除节点",
+                "inputs": {},
+                "outputs": {
+                    "affected": {"type": "number", "desc": "影响的行数"}
+                },
+                "configs": {
+                    "table": "table_name",
+                    "sql": "DELETE FROM table_name WHERE ..."
+                },
+                "nextNodes": []
+            },
+            "condition": {
+                "name": "CheckCondition",
+                "type": "condition",
+                "desc": "条件判断节点",
+                "inputs": {},
+                "configs": {
+                    "conditionGroups": [
+                        {
+                            "relationship": "AND",
+                            "conditions": [
+                                {
+                                    "left": "$.input.value",
+                                    "operator": "equal",
+                                    "right": "expected_value"
+                                }
+                            ],
+                            "nextNode": "NextNode"
+                        }
+                    ],
+                    "defaultNextNode": "DefaultNode"
+                }
+            },
+            "http": {
+                "name": "HttpRequest",
+                "type": "http",
+                "desc": "HTTP请求节点",
+                "inputs": {},
+                "outputs": {
+                    "code": {"type": "number", "desc": "HTTP状态码"},
+                    "data": {"type": "object", "desc": "响应数据"}
+                },
+                "configs": {
+                    "method": "GET",
+                    "url": "https://api.example.com/endpoint",
+                    "headers": {},
+                    "timeout": 30
+                },
+                "nextNodes": []
+            },
+            "chatWithLLM": {
+                "name": "ChatWithLLM",
+                "type": "chatWithLLM",
+                "desc": "LLM对话节点",
+                "inputs": {},
+                "outputs": {
+                    "thinking": {"type": "string", "desc": "思考过程"},
+                    "response": {"type": "string", "desc": "LLM响应"},
+                    "tokens": {"type": "number", "desc": "使用的token数"}
+                },
+                "configs": {
+                    "model": "default",
+                    "temperature": 0.7,
+                    "max_tokens": 1000
+                },
+                "nextNodes": []
+            },
+            "code": {
+                "name": "ExecuteCode",
+                "type": "code",
+                "desc": "代码执行节点",
+                "inputs": {},
+                "outputs": {
+                    "result": {"type": "object", "desc": "代码执行结果"},
+                    "logs": {"type": "array", "desc": "执行日志"}
+                },
+                "configs": {
+                    "code": "// JavaScript代码",
+                    "timeout": 30
+                },
+                "nextNodes": []
+            },
+            "transaction": {
+                "name": "TransactionProcess",
+                "type": "transaction",
+                "desc": "数据库事务节点",
+                "inputs": {},
+                "outputs": {
+                    "committed": {"type": "boolean", "desc": "事务是否成功提交"},
+                    "affectedTotal": {"type": "number", "desc": "事务中所有操作影响的总行数"},
+                    "childResults": {"type": "array", "desc": "所有子节点的执行结果数组"},
+                    "executionTime": {"type": "number", "desc": "事务执行耗时（毫秒）"}
+                },
+                "configs": {
+                    "isolation": "READ_COMMITTED",
+                    "timeout": 60,
+                    "children": []
+                },
+                "nextNodes": []
+            },
+            "batch": {
+                "name": "BatchProcess",
+                "type": "batch",
+                "desc": "批量处理节点",
+                "inputs": {},
+                "outputs": {
+                    "totalProcessed": {"type": "number", "desc": "总处理数量"},
+                    "successCount": {"type": "number", "desc": "成功处理数量"},
+                    "failureCount": {"type": "number", "desc": "失败处理数量"},
+                    "aggregatedResult": {"type": "object", "desc": "聚合结果"},
+                    "executionTime": {"type": "number", "desc": "批处理执行耗时（毫秒）"}
+                },
+                "configs": {
+                    "mapConfig": {
+                        "dataSource": "$.input.data",
+                        "concurrency": 5
+                    },
+                    "reduceConfig": {
+                        "strategy": "sum"
+                    },
+                    "child": {}
+                },
+                "nextNodes": []
+            },
+            "workflow": {
+                "name": "CallWorkflow",
+                "type": "workflow",
+                "desc": "工作流调用节点",
+                "inputs": {},
+                "outputs": {
+                    "code": {"type": "number", "desc": "HTTP状态码"},
+                    "data": {"type": "object", "desc": "响应数据"},
+                    "message": {"type": "string", "desc": "响应消息"}
+                },
+                "configs": {
+                    "workflowName": "target_workflow",
+                    "inputMappings": {},
+                    "outputMappings": {}
+                },
+                "nextNodes": []
+            }
+        }
+        
+        return default_configs.get(node_type, {
+            "name": "DefaultNode",
+            "type": node_type,
+            "desc": f"默认{node_type}节点",
+            "inputs": {},
+            "outputs": {},
+            "configs": {},
+            "nextNodes": []
+        })
     
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
         """解析LLM响应"""
@@ -581,12 +909,12 @@ class RequirementAnalyzer(BaseAgent):
     
     def _validate_node_config(self, node_config: Dict[str, Any], expected_type: str) -> Dict[str, Any]:
         """验证节点配置"""
-        # 检查必需字段，但根据节点类型决定是否需要outputs
-        required_fields = ["name", "type", "desc", "inputs", "configs", "nextNodes"]
+        # 检查必需字段，但根据节点类型决定是否需要outputs和nextNodes
+        required_fields = ["name", "type", "desc", "inputs", "configs"]
         
-        # 根据节点类型决定是否需要outputs字段
-        if expected_type != "condition":  # condition节点不需要outputs字段
-            required_fields.append("outputs")
+        # 根据节点类型决定是否需要outputs和nextNodes字段
+        if expected_type != "condition":  # condition节点不需要outputs和nextNodes字段
+            required_fields.extend(["outputs", "nextNodes"])
         
         for field in required_fields:
             if field not in node_config:
@@ -623,11 +951,14 @@ class RequirementAnalyzer(BaseAgent):
             logger.warning(f"节点类型不匹配，期望 {expected_type}，实际 {node_config.get('type')}")
             node_config["type"] = expected_type
         
-        # 特殊处理：condition节点不应该有outputs字段
+        # 特殊处理：condition节点不应该有outputs和nextNodes字段
         if expected_type == "condition":
             if "outputs" in node_config:
                 logger.info(f"移除condition节点的outputs字段，因为condition节点不产生数据输出")
                 del node_config["outputs"]
+            if "nextNodes" in node_config:
+                logger.info(f"移除condition节点的nextNodes字段，因为condition节点的流向由条件配置决定")
+                del node_config["nextNodes"]
                 
         # 特殊处理：确保workflowEnd节点的nextNodes正确
         if expected_type == "workflowEnd":
@@ -763,7 +1094,7 @@ class RequirementAnalyzer(BaseAgent):
                 "url": "https://api.example.com",
                 "bodyType": "none"
             }
-        elif node_type == "llm":
+        elif node_type == "chatWithLLM":
             fallback_node["outputs"] = {
                 "thinking": {
                     "type": "string",
@@ -782,10 +1113,11 @@ class RequirementAnalyzer(BaseAgent):
                 "modelId": "gpt-3.5-turbo"
             }
         elif node_type == "condition":
-            # condition节点不需要outputs字段
+            # condition节点不需要outputs和nextNodes字段
             if "outputs" in fallback_node:
                 del fallback_node["outputs"]
-            fallback_node["nextNodes"] = []  # 条件节点的nextNodes为空
+            if "nextNodes" in fallback_node:
+                del fallback_node["nextNodes"]
             fallback_node["configs"] = {
                 "conditionGroups": [],
                 "defaultNextNode": ""
