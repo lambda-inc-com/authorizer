@@ -594,12 +594,20 @@ class WorkflowValidator(BaseAgent):
         # 检查起始和结束节点
         start_nodes = [node for node in nodes if node.get("type") == "workflowStart"]
         end_nodes = [node for node in nodes if node.get("type") == "workflowEnd"]
+        condition_nodes = [node for node in nodes if node.get("type") == "condition"]
         
         if len(start_nodes) != 1:
             errors.append("工作流必须包含且仅包含一个workflowStart节点")
         
-        if len(end_nodes) != 1:
-            errors.append("工作流必须包含且仅包含一个workflowEnd节点")
+        if len(end_nodes) == 0:
+            errors.append("工作流必须至少包含一个workflowEnd节点")
+        elif len(end_nodes) > 1:
+            # 如果有多个结束节点，检查是否有条件节点来合理化这种设计
+            if len(condition_nodes) == 0:
+                warnings.append(f"工作流包含{len(end_nodes)}个结束节点，但没有条件节点。建议使用条件节点来管理不同的结束路径")
+            else:
+                # 有条件节点的情况下，多个结束节点是合理的
+                pass
         
         # 检查节点连接关系
         connectivity_errors = self._validate_connectivity(nodes)

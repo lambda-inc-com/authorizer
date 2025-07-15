@@ -30,7 +30,7 @@ class RequirementAnalyzer(BaseAgent):
             },
             "workflowEnd": {
                 "description": "工作流结束节点，定义工作流的输出结果", 
-                "usage": "必须作为工作流的终止点，定义最终输出结果",
+                "usage": "必须作为工作流的终止点，定义最终输出结果。可以有多个结束节点处理不同分支的结果",
                 "required": True
             },
             "dbQuery": {

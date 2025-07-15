@@ -19,7 +19,7 @@
 ```
 
 ## 节点基本结构
-每个节点都必须包含以下基本字段：
+节点有如下基本字段：
 
 ```json
 {
@@ -69,7 +69,7 @@
 - 直接字符串值 - 静态数据
 - **禁止**: 循环引用自身或形成引用环
 
-### outputs *(必填)*
+### outputs *(可选)*
 输出参数定义，定义节点执行后产生的数据：
 
 **内置节点 outputs**：
@@ -105,16 +105,16 @@
 }
 ```
 
-### configs *(必填)*
+### configs *(可选)*
 节点特定的配置参数，根据不同节点类型有不同的配置结构。
 每种节点类型都有自己的配置规范，具体参考各节点的配置说明。
 
-### nextNodes *(必填)*
+### nextNodes *(可选)*
 定义当前节点执行完成后的流向：
 - 数组格式: ["下一个节点名称"]
-- 对于条件节点，不需要在此字段指定连接关系
-- 对于结束节点，使用: ["end"]
 - 可以连接多个节点实现并发执行
+- 对于条件节点，无此字段，流向由条件组决定
+- 对于结束节点，无此字段
 
 ## JSON Path 数据引用
 
@@ -127,6 +127,11 @@
 - 数组访问：`$.GetUsers.outputs.data[0].name`
 - 条件过滤：`$.Users.outputs.data[?(@.status == 'active')]`
 - 嵌套访问：`$.User.outputs.profile.email`
+
+## 强制约束条件
+1. **英文命名约束**: 工作流名称和节点名称必须全部使用英文命名，禁止使用中文字符
+2. **节点引用约束**: 所有节点引用必须使用实际存在的节点名称，如 `$.QuerySupplier.outputs.status`
+3. **引用准确性**: 禁止使用不存在的节点名称进行引用，系统会进行严格验证
 
 以下是各种节点类型的具体配置说明：
 
@@ -148,7 +153,7 @@
 ## 配置示例
 ```json
 {
-    "name": "Start",
+    "name": "WorkflowStart",
     "type": "workflowStart",
     "desc": "工作流开始节点",
     "inputs": {
@@ -169,6 +174,8 @@
 
 ## 功能说明
 工作流结束节点，定义工作流的API响应输出结果，作为工作流的终止点。**必须返回标准的API响应格式**。
+
+**注意**: 每个工作流必须至少包含一个结束节点。当工作流包含条件分支时，可以有多个结束节点来处理不同分支的结果。
 
 ## inputs 输入参数
 用户自由配置，通常用于接收前面节点的最终结果
@@ -593,6 +600,92 @@ data为对象类型
 6. 建议为重要的批量操作设置适当的超时时间
 7. child配置包含完整的节点定义，而不是简单的配置引用
 
+## 完整示例
+```json
+{
+  "name": "BatchInsertUsers",
+  "type": "batch",
+  "desc": "批量插入用户数据并统计成功数量",
+  "inputs": {
+    "userList": {
+      "type": "array",
+      "value": "$.GetUserList.outputs.data",
+      "desc": "要插入的用户列表"
+    }
+  },
+  "outputs": {
+    "totalProcessed": {
+      "type": "number",
+      "desc": "处理的总数量"
+    },
+    "successCount": {
+      "type": "number",
+      "desc": "成功插入的数量"
+    },
+    "failureCount": {
+      "type": "number",
+      "desc": "失败插入的数量"
+    },
+    "aggregatedResult": {
+      "type": "number",
+      "desc": "总的插入行数"
+    },
+    "executionTime": {
+      "type": "number",
+      "desc": "批处理执行耗时（毫秒）"
+    }
+  },
+  "configs": {
+    "concurrency": 3,
+    "timeout": 120,
+    "continueOnError": true,
+    "mapConfig": {
+      "dataSource": "$.BatchInsertUsers.inputs.userList",
+      "itemVariable": "$.currentItem",
+      "indexVariable": "$.currentIndex"
+    },
+    "reduceConfig": {
+      "strategy": "sum",
+      "targetField": "affected"
+    }
+  },
+  "child": {
+    "name": "InsertUser",
+    "type": "dbCreate",
+    "desc": "插入单个用户",
+    "inputs": {
+      "name": {
+        "type": "string",
+        "value": "$.currentItem.name",
+        "desc": "用户名"
+      },
+      "email": {
+        "type": "string",
+        "value": "$.currentItem.email",
+        "desc": "邮箱"
+      }
+    },
+    "outputs": {
+      "affected": {
+        "type": "number",
+        "desc": "影响的行数"
+      },
+      "insertId": {
+        "type": "string",
+        "desc": "新插入记录的ID"
+      }
+    },
+    "configs": {
+      "table": "users_table",
+      "sql": "INSERT INTO users_table (name, email) VALUES ($.InsertUser.inputs.name, $.InsertUser.inputs.email)"
+    }
+  },
+  "nextNodes": [
+    "ProcessResult"
+  ]
+}
+```
+
 
 
 # 条件判断节点 (Condition Node)
@@ -613,7 +706,6 @@ data为对象类型
 
 ### 基本配置
 - **conditionGroups**: 条件组列表 *(必填)*
-- **groupRelationship**: 条件组之间的逻辑关系 (AND/OR) *(可选)*
 - **defaultNextNode**: 默认跳转节点 *(可选)*
 
 ### 条件组配置 (conditionGroups)
@@ -640,23 +732,40 @@ data为对象类型
 
 ## 核心要点
 1. **顺序评估**：按顺序评估条件组，首个匹配的执行
-2. **逻辑关系**：组内用relationship，组间用groupRelationship
-3. **变量引用**：使用`$.节点名.inputs.字段名`格式
-4. **默认分支**：设置defaultNextNode处理未匹配情况
+2. **变量引用**：使用`$.节点名.inputs.字段名`格式
+3. **默认分支**：设置defaultNextNode处理未匹配情况
+4. **特别注意**：条件节点不需要设置 nextNodes 数组，条件关系由 configs.conditionGroups 中每个 conditionGroup 的 nextNode 和 configs.defaultNextNode 决定
 
-## 配置示例
+
+## 完整示例
 ```json
 {
-  "conditionGroups": [{
-    "conditions": [{
-      "left": "$.CheckUser.inputs.userType",
-      "operator": "equal", 
-      "right": "vip"
-    }],
-    "relationship": "AND",
-    "nextNode": "VipProcess"
-  }],
-  "defaultNextNode": "NormalProcess"
+  "name": "CheckUserType",
+  "type": "condition",
+  "desc": "检查用户类型",
+  "inputs": {
+    "userType": {
+      "type": "string",
+      "value": "$.GetUserInfo.outputs.userType",
+      "desc": "用户类型"
+    }
+  },
+  "configs": {
+    "conditionGroups": [
+      {
+        "relationship": "AND",
+        "conditions": [
+          {
+            "left": "$.CheckUserType.inputs.userType",
+            "operator": "equal",
+            "right": "vip"
+          }
+        ],
+        "nextNode": "VipProcess"
+      }
+    ],
+    "defaultNextNode": "NormalProcess"
+  }
 }
 ```
 
@@ -675,7 +784,7 @@ data为对象类型
 
 ### 参数映射
 - **inputMappings**: 输入参数映射 *(必填)*
-  - sourceField: 数据来源，如 `$.PrevNode.outputs.data`
+  - sourceField: 数据来源，如 `$.nodeId.outputs.data`
   - targetField: 目标工作流输入字段名
   - desc: 映射说明
 - **outputMappings**: 输出参数映射 *(必填)*
@@ -753,6 +862,39 @@ data为对象类型
 5. 变量引用支持嵌套对象访问，如 `$.QueryUser.inputs.user.profile.email`
 6. 合理使用 WHERE 条件和 LIMIT 子句优化查询性能
 
+## 完整示例
+```json
+{
+  "name": "QueryUser",
+  "type": "dbQuery",
+  "desc": "查询用户信息",
+  "inputs": {
+    "userId": {
+      "type": "string",
+      "value": "$.GetUserId.outputs.userId",
+      "desc": "用户ID"
+    }
+  },
+  "outputs": {
+    "affected": {
+      "type": "number",
+      "desc": "查询返回的行数"
+    },
+    "data": {
+      "type": "array",
+      "desc": "查询结果数据"
+    }
+  },
+  "configs": {
+    "table": "your_table_name",
+    "sql": "SELECT * FROM your_table_name WHERE id = $.QueryUser.inputs.userId"
+  },
+  "nextNodes": [
+    "ProcessResult"
+  ]
+}
+```
+
 
 
 # 数据库创建节点 (DbCreate Node)
@@ -786,6 +928,44 @@ data为对象类型
 6. 变量引用支持嵌套对象访问，如 `$.CreateUser.inputs.user.profile.email`
 7. 确保必填字段都有对应的输入参数
 
+## 完整示例
+```json
+{
+  "name": "CreateUser",
+  "type": "dbCreate",
+  "desc": "创建用户记录",
+  "inputs": {
+    "name": {
+      "type": "string",
+      "value": "$.GetUserData.outputs.name",
+      "desc": "用户名"
+    },
+    "email": {
+      "type": "string",
+      "value": "$.GetUserData.outputs.email",
+      "desc": "邮箱"
+    }
+  },
+  "outputs": {
+    "affected": {
+      "type": "number",
+      "desc": "影响的行数"
+    },
+    "insertId": {
+      "type": "string",
+      "desc": "新插入记录的ID"
+    }
+  },
+  "configs": {
+    "table": "your_table_name",
+    "sql": "INSERT INTO your_table_name (name, email) VALUES ($.CreateUser.inputs.name, $.CreateUser.inputs.email)"
+  },
+  "nextNodes": [
+    "ProcessResult"
+  ]
+}
+```
+
 
 
 # 数据库更新节点 (DbUpdate Node)
@@ -817,6 +997,40 @@ data为对象类型
 5. 支持数据库函数如 NOW()、CONCAT() 等
 6. 变量引用支持嵌套对象访问，如 `$.UpdateUser.inputs.user.profile.email`
 7. WHERE 条件必须明确，确保只更新目标记录
+
+## 完整示例
+```json
+{
+  "name": "UpdateRecord",
+  "type": "dbUpdate",
+  "desc": "更新记录信息",
+  "inputs": {
+    "recordId": {
+      "type": "string",
+      "value": "$.GetRecordInfo.outputs.recordId",
+      "desc": "记录ID"
+    },
+    "status": {
+      "type": "string",
+      "value": "$.GetRecordInfo.outputs.status",
+      "desc": "记录状态"
+    }
+  },
+  "outputs": {
+    "affected": {
+      "type": "number",
+      "desc": "影响的行数"
+    }
+  },
+  "configs": {
+    "table": "your_table_name",
+    "sql": "UPDATE your_table_name SET status = $.UpdateRecord.inputs.status WHERE id = $.UpdateRecord.inputs.recordId"
+  },
+  "nextNodes": [
+    "ProcessResult"
+  ]
+}
+```
 
 
 
@@ -850,6 +1064,35 @@ data为对象类型
 6. 变量引用支持嵌套对象访问，如 `$.DeleteUser.inputs.user.profile.email`
 7. WHERE 条件必须明确，确保只删除目标记录
 8. 考虑使用软删除（更新状态字段）代替物理删除
+
+## 完整示例
+```json
+{
+  "name": "DeleteRecord",
+  "type": "dbDelete",
+  "desc": "删除目标记录",
+  "inputs": {
+    "recordId": {
+      "type": "string",
+      "value": "$.GetTargetRecord.outputs.recordId",
+      "desc": "记录ID"
+    }
+  },
+  "outputs": {
+    "affected": {
+      "type": "number",
+      "desc": "影响的行数"
+    }
+  },
+  "configs": {
+    "table": "target_table",
+    "sql": "DELETE FROM target_table WHERE id = $.DeleteRecord.inputs.recordId"
+  },
+  "nextNodes": [
+    "ProcessResult"
+  ]
+}
+```
 
 
 
@@ -893,69 +1136,6 @@ data为对象类型
 - **REPEATABLE_READ**: 可重复读
 - **SERIALIZABLE**: 串行化（最高隔离级别）
 
-## 配置示例
-```json
-{
-  "configs": {
-    "isolation": "READ_COMMITTED",
-    "timeout": 60
-  },
-  "children": [
-    {
-      "name": "CreateUser",
-      "type": "dbCreate",
-      "desc": "创建新用户",
-      "order": 1,
-      "inputs": {},
-      "outputs": {
-        "affected": {
-          "type": "number",
-          "desc": "影响的行数"
-        },
-        "insertId": {
-          "type": "string",
-          "desc": "新用户ID"
-        }
-      },
-      "configs": {
-        "table": "your_table_name",
-        "data": {
-          "name": "$.TransactionNode.inputs.userData.name",
-          "email": "$.TransactionNode.inputs.userData.email",
-          "status": "active"
-        },
-        "timeout": 30
-      }
-    },
-    {
-      "name": "CreateProfile",
-      "type": "dbCreate",
-      "desc": "创建用户档案",
-      "order": 2,
-      "inputs": {},
-      "outputs": {
-        "affected": {
-          "type": "number",
-          "desc": "影响的行数"
-        },
-        "insertId": {
-          "type": "string",
-          "desc": "档案ID"
-        }
-      },
-      "configs": {
-        "table": "related_table",
-        "data": {
-          "user_id": "$.CreateUser.outputs.insertId",
-          "bio": "$.TransactionNode.inputs.userData.bio"
-        },
-        "timeout": 30
-      }
-    }
-  ]
-}
-```
-
 ## 输出结果
 事务节点的输出结果为内置字段，系统自动生成，不需要在DSL中配置value字段
 
@@ -979,6 +1159,76 @@ data为对象类型
 6. 事务失败时会自动回滚所有已执行的操作
 7. 建议将相关的数据库操作组合在同一个事务中
 8. children数组包含完整的节点定义，而不是简单的配置引用
+
+## 完整示例
+```json
+{
+  "name": "CreateRecordTransaction",
+  "type": "transaction",
+  "desc": "创建记录事务",
+  "inputs": {
+    "name": {
+      "type": "string",
+      "value": "$.GetRecordData.outputs.name",
+      "desc": "记录名称"
+    }
+  },
+  "outputs": {
+    "committed": {
+      "type": "boolean",
+      "desc": "事务是否成功提交"
+    },
+    "affectedTotal": {
+      "type": "number",
+      "desc": "事务中所有操作影响的总行数"
+    },
+    "childResults": {
+      "type": "array",
+      "desc": "所有子节点的执行结果数组"
+    },
+    "executionTime": {
+      "type": "number",
+      "desc": "事务执行耗时（毫秒）"
+    }
+  },
+  "configs": {
+    "isolation": "READ_COMMITTED",
+    "timeout": 60
+  },
+  "children": [
+    {
+      "name": "CreateRecord",
+      "type": "dbCreate",
+      "desc": "创建记录",
+      "order": 1,
+      "inputs": {
+        "name": {
+          "type": "string",
+          "value": "$.CreateRecordTransaction.inputs.name",
+          "desc": "记录名称"
+        }
+      },
+      "outputs": {
+        "affected": {
+          "type": "number",
+          "desc": "影响的行数"
+        },
+        "insertId": {
+          "type": "string",
+          "desc": "新插入记录的ID"
+        }
+      },
+      "configs": {
+        "table": "your_table_name",
+        "sql": "INSERT INTO your_table_name (name) VALUES ($.CreateRecord.inputs.name)"
+      }
+    }
+  ],
+  "nextNodes": [
+    "ProcessResult"
+  ]
+}
+```
 
 
 # 代码执行节点 (Code Node)
@@ -1070,16 +1320,65 @@ export default function main(inputs) {
 3. **完整输出**：返回对象必须包含所有outputs定义的字段
 4. **错误处理**：必须用try-catch确保始终返回有效结果
 
-## 简单示例
-```javascript
-export default function main(inputs) {
-    const { userId, userData } = inputs;
-    const isValid = userData.age >= 18;
-    
-    return {
-        isValid,
-        errorMsg: isValid ? null : "年龄不符合要求"
-    };
+
+## 完整示例
+```json
+{
+  "name": "ProcessUserData",
+  "type": "code",
+  "desc": "处理用户数据并进行业务逻辑计算",
+  "inputs": {
+    "userId": {
+      "type": "string",
+      "value": "$.GetUser.outputs.id",
+      "desc": "用户ID"
+    },
+    "userData": {
+      "type": "object",
+      "value": "$.GetUser.outputs.data",
+      "desc": "用户原始数据"
+    },
+    "config": {
+      "type": "object",
+      "value": "$.GetConfig.outputs.settings",
+      "desc": "处理配置"
+    }
+  },
+  "outputs": {
+    "processedData": {
+      "type": "object",
+      "value": "$.ProcessUserData.result.processedData",
+      "desc": "处理后的用户数据"
+    },
+    "isValid": {
+      "type": "boolean",
+      "value": "$.ProcessUserData.result.isValid",
+      "desc": "数据是否有效"
+    },
+    "errorMessage": {
+      "type": "string",
+      "value": "$.ProcessUserData.result.errorMessage",
+      "desc": "错误信息（如果有）"
+    },
+    "score": {
+      "type": "number",
+      "value": "$.ProcessUserData.result.score",
+      "desc": "计算得分"
+    }
+  },
+  "configs": {
+    "dependencies": [
+      "lodash",
+      "dayjs"
+    ],
+    "file": {
+      "name": "processUserData.js",
+      "content": "import _ from 'lodash';\nimport dayjs from 'dayjs';\n\nexport default function main(inputs) {\n    const { userId, userData, config } = inputs;\n    \n    try {\n        const processedData = {\n            id: userId,\n            name: _.capitalize(userData.name),\n            email: userData.email.toLowerCase(),\n            processedAt: dayjs().format('YYYY-MM-DD HH:mm:ss')\n        };\n        \n        const isValid = userData.age >= 18 && userData.email.includes('@');\n        let score = userData.age >= 18 ? 20 : 0;\n        \n        return {\n            processedData,\n            isValid,\n            errorMessage: isValid ? null : '数据验证失败',\n            score\n        };\n    } catch (error) {\n        return {\n            processedData: null,\n            isValid: false,\n            errorMessage: error.message,\n            score: 0\n        };\n    }\n}"
+    }
+  },
+  "nextNodes": [
+    "CheckResult"
+  ]
 }
 ```
 
@@ -1121,27 +1420,6 @@ HTTP节点固定返回以下字段：
 - **bodyType**: 请求体类型 (none, json, form-data, text) *(必填)*
 - **body**: 请求体内容，字符串格式 *(可选)*
 
-## 配置示例
-```json
-{
-  "method": "POST",
-  "url": "https://api.example.com/users/:userId/profile",
-  "timeout": 30,
-  "params": {
-    "userId": "$.HttpRequest.inputs.userId"
-  },
-  "queryParams": {
-    "format": "json",
-    "version": "v1"
-  },
-  "headers": {
-    "Content-Type": "application/json",
-    "Authorization": "Bearer $.HttpRequest.inputs.token"
-  },
-  "bodyType": "json",
-  "body": "$.HttpRequest.inputs.userData"
-}
-```
 
 ## 输出结果说明
 - **code**: HTTP状态码，用于判断请求是否成功
@@ -1158,6 +1436,51 @@ HTTP节点固定返回以下字段：
 3. 建议设置合理的超时时间
 4. POST/PUT请求需要配置适当的请求体
 5. 敏感信息建议通过环境变量传递
+
+## 完整示例
+```json
+{
+  "name": "CallAPI",
+  "type": "http",
+  "desc": "调用外部API",
+  "inputs": {
+    "userId": {
+      "type": "string",
+      "value": "$.GetUserData.outputs.userId",
+      "desc": "用户ID"
+    }
+  },
+  "outputs": {
+    "code": {
+      "type": "number",
+      "desc": "HTTP状态码"
+    },
+    "data": {
+      "type": "object",
+      "desc": "响应数据"
+    },
+    "message": {
+      "type": "string",
+      "desc": "响应消息"
+    }
+  },
+  "configs": {
+    "method": "GET",
+    "url": "https://api.example.com/users/:userId",
+    "params": {
+      "userId": "$.CallAPI.inputs.userId"
+    },
+    "timeout": 30,
+    "cookies": {
+      "sessionId": "$.CallAPI.inputs.sessionId"
+    },
+    "bodyType": "none"
+  },
+  "nextNodes": [
+    "ProcessResponse"
+  ]
+}
+```
 
 
 
@@ -1189,18 +1512,6 @@ LLM节点固定返回以下字段：
 - **frequencyPenalty**: 频率惩罚 (-2到2)，减少重复内容 *(可选)*
 - **presencePenalty**: 存在惩罚 (-2到2)，鼓励话题多样性 *(可选)*
 
-## 配置示例
-```json
-{
-  "modelId": "gpt-4",
-  "temperature": 0.7,
-  "maxTokens": 1000,
-  "topP": 0.9,
-  "frequencyPenalty": 0,
-  "presencePenalty": 0,
-  "systemPrompt": "你是一个有用的AI助手。"
-}
-```
 
 ## 输入数据
 - **userInput**: 用户输入内容，可以是字符串或消息数组
@@ -1233,4 +1544,42 @@ LLM节点固定返回以下字段：
 3. 不同模型支持的参数可能有差异
 4. 敏感信息不要包含在prompt中
 5. 建议先测试参数组合的效果
+
+## 完整示例
+```json
+{
+  "name": "GenerateResponse",
+  "type": "chatWithLLM",
+  "desc": "生成AI回复",
+  "inputs": {
+    "userInput": {
+      "type": "string",
+      "value": "$.GetMessage.outputs.message",
+      "desc": "用户输入"
+    }
+  },
+  "outputs": {
+    "thinking": {
+      "type": "string",
+      "desc": "AI思考过程"
+    },
+    "response": {
+      "type": "string",
+      "desc": "AI生成的回复"
+    },
+    "tokens": {
+      "type": "object",
+      "desc": "Token使用情况"
+    }
+  },
+  "configs": {
+    "modelId": "gpt-4",
+    "temperature": 0.7,
+    "systemPrompt": "你是一个有用的AI助手"
+  },
+  "nextNodes": [
+    "ProcessReply"
+  ]
+}
+```
 
