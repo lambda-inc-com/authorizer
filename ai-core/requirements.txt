@@ -1,10 +1,8 @@
 # AI Core模块依赖
 anthropic>=0.7.0
 openai>=1.0.0
-asyncio
 asyncpg>=0.29.0
 python-dotenv>=1.0.0
 grpcio>=1.60.0
 grpcio-tools>=1.60.0
-protobuf>=4.25.0
-logging 
+protobuf>=4.25.0 
