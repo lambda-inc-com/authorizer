@@ -36,8 +36,8 @@ type StreamChatRequest struct {
 
 // StreamWorkflowRequest 流式工作流请求
 type StreamWorkflowRequest struct {
-	Requirement string            `json:"requirement" binding:"required"`
-	Config      map[string]string `json:"config,omitempty"`
+	Requirement string                 `json:"requirement" binding:"required"`
+	Config      map[string]interface{} `json:"config,omitempty"`
 }
 
 // StreamChatHandler 流式聊天接口
@@ -439,7 +439,13 @@ func (h *AIStreamHandler) StreamWorkflowGenerateHandler() gin.HandlerFunc {
 			"requirement": request.Requirement,
 		}
 		for k, v := range request.Config {
-			inputs[k] = v
+			// 安全的类型转换：将 interface{} 转换为 string
+			if str, ok := v.(string); ok {
+				inputs[k] = str
+			} else {
+				// 如果不是 string 类型，使用 fmt.Sprintf 转换
+				inputs[k] = fmt.Sprintf("%v", v)
+			}
 		}
 
 		// 启动gRPC流式调用 - 增加超时时间以适应线上环境和复杂工作流生成

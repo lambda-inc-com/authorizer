@@ -29,7 +29,9 @@ class RequirementAnalyzer(BaseAgent):
         super().__init__(AgentRole.REQUIREMENT_ANALYZER, message_bus, state_manager)
         self.llm_client = llm_client
         self.node_types_info = self._load_node_types_info()
-        self.dsl_templates = self._load_dsl_templates()
+        # 先使用默认模板，稍后异步加载数据库模板
+        self.dsl_templates = self._get_default_templates()
+        self._db_templates_loaded = False
     
     def _load_node_types_info(self) -> Dict[str, Any]:
         """加载节点类型信息"""
@@ -104,24 +106,32 @@ class RequirementAnalyzer(BaseAgent):
     def _load_dsl_templates(self) -> Dict[str, str]:
         """从数据库中加载DSL模板"""
         try:
-            # 尝试从数据库加载
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # 检查是否已有运行中的事件循环
             try:
-                templates = loop.run_until_complete(self._load_templates_from_db())
-                if templates:
-                    logger.info(f"成功从数据库加载了 {len(templates)} 个节点模板")
-                    return templates
-                else:
-                    logger.warning("数据库中没有找到节点模板，使用默认模板")
-                    return self._get_default_templates()
-            finally:
-                loop.close()
-                
+                # 尝试获取当前事件循环
+                current_loop = asyncio.get_running_loop()
+                logger.warning("检测到运行中的事件循环，跳过数据库加载，使用默认模板")
+                return self._get_default_templates()
+            except RuntimeError:
+                # 没有运行中的事件循环，可以创建新的
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    templates = loop.run_until_complete(self._load_templates_from_db())
+                    if templates:
+                        logger.info(f"成功从数据库加载了 {len(templates)} 个节点模板")
+                        return templates
+                except Exception as inner_e:
+                    logger.error(f"数据库模板加载执行失败: {str(inner_e)}")
+                finally:
+                    loop.close()
+                    asyncio.set_event_loop(None)
         except Exception as e:
             logger.error(f"从数据库加载DSL模板失败: {str(e)}，使用默认模板")
-            return self._get_default_templates()
-    
+        
+        # 如果数据库加载失败，使用默认模板
+        return self._get_default_templates()
+
     async def _load_templates_from_db(self) -> Dict[str, str]:
         """从数据库异步加载节点模板"""
         conn = None
@@ -158,7 +168,7 @@ class RequirementAnalyzer(BaseAgent):
                 # 构建完整的模板内容
                 template_content = self._build_template_content(node_type, description, example)
                 templates[node_type] = template_content
-                logger.info(templates)
+                logger.debug(f"加载模板: {node_type}")
             
             logger.info(f"从数据库成功加载 {len(templates)} 个节点模板")
             return templates
@@ -169,6 +179,14 @@ class RequirementAnalyzer(BaseAgent):
         finally:
             if conn:
                 await conn.close()
+
+    async def _load_templates_from_db_async(self) -> Dict[str, str]:
+        """异步方式从数据库加载模板（推荐使用）"""
+        try:
+            return await self._load_templates_from_db()
+        except Exception as e:
+            logger.error(f"异步加载数据库模板失败: {str(e)}")
+            return self._get_default_templates()
     
     def _get_database_url(self) -> Optional[str]:
         """获取数据库连接URL"""
@@ -269,6 +287,9 @@ class RequirementAnalyzer(BaseAgent):
     async def process_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """处理需求分析任务 - 增强版流程"""
         try:
+            # 确保数据库模板已加载
+            await self._ensure_db_templates_loaded()
+            
             # 获取共享上下文
             context = await self.state_manager.get_context()
             user_requirement = context.user_requirement
@@ -1271,3 +1292,19 @@ class RequirementAnalyzer(BaseAgent):
             }
         
         return fallback_node 
+
+    async def _ensure_db_templates_loaded(self):
+        """确保数据库模板已加载（首次调用时异步加载）"""
+        if not hasattr(self, '_db_templates_loaded') or not self._db_templates_loaded:
+            try:
+                db_templates = await self._load_templates_from_db()
+                if db_templates:
+                    # 更新现有模板，数据库模板优先
+                    self.dsl_templates.update(db_templates)
+                    logger.info(f"成功异步加载 {len(db_templates)} 个数据库模板")
+                else:
+                    logger.info("数据库模板为空，继续使用默认模板")
+                self._db_templates_loaded = True
+            except Exception as e:
+                logger.error(f"异步加载数据库模板失败: {str(e)}")
+                self._db_templates_loaded = True  # 标记为已尝试，避免重复加载 
