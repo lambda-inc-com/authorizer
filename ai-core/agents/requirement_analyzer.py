@@ -174,9 +174,10 @@ class RequirementAnalyzer(BaseAgent):
         """获取数据库连接URL"""
         try:
             # 首先尝试直接获取DATABASE_URL
-            database_url = os.getenv('DATABASE_URL')
+            database_url = os.getenv('DATABASE_URLs')
+            logger.info(database_url)
             if database_url:
-                logger.info("使用环境变量 DATABASE_URL")
+                logger.info("使用环境变量 DATABASE_URLs")
                 return database_url
             
             # 如果没有DATABASE_URL，则从各个组件构建
