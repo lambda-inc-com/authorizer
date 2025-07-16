@@ -8,6 +8,17 @@ import logging
 from typing import Dict, List, Any, Optional
 from multi_agent_workflow_generator import BaseAgent, AgentRole, MessageType
 
+# 添加数据库相关导入
+import os
+import asyncio
+import asyncpg
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv("../../server/.env")  # server目录 (优先)
+load_dotenv("../../.env")  # 上级目录
+load_dotenv()  # 当前目录
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,70 +102,143 @@ class RequirementAnalyzer(BaseAgent):
         }
     
     def _load_dsl_templates(self) -> Dict[str, str]:
-        """加载DSL模板，从dsl.md文件中读取每个节点类型的详细配置说明"""
+        """从数据库中加载DSL模板"""
         try:
-            # 读取DSL文件
-            import os
-            dsl_file_path = os.path.join(os.path.dirname(__file__), "..", "dsl.md")
+            # 尝试从数据库加载
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                templates = loop.run_until_complete(self._load_templates_from_db())
+                if templates:
+                    logger.info(f"成功从数据库加载了 {len(templates)} 个节点模板")
+                    return templates
+                else:
+                    logger.warning("数据库中没有找到节点模板，使用默认模板")
+                    return self._get_default_templates()
+            finally:
+                loop.close()
+                
+        except Exception as e:
+            logger.error(f"从数据库加载DSL模板失败: {str(e)}，使用默认模板")
+            return self._get_default_templates()
+    
+    async def _load_templates_from_db(self) -> Dict[str, str]:
+        """从数据库异步加载节点模板"""
+        conn = None
+        try:
+            # 获取数据库连接配置
+            database_url = self._get_database_url()
+            if not database_url:
+                logger.warning("数据库URL未配置，无法连接数据库")
+                return {}
             
-            if not os.path.exists(dsl_file_path):
-                logger.warning("dsl.md文件不存在，使用默认模板")
-                return self._get_default_templates()
+            # 连接数据库
+            conn = await asyncpg.connect(database_url)
             
-            with open(dsl_file_path, 'r', encoding='utf-8') as f:
-                dsl_content = f.read()
+            # 查询节点类型模板
+            query = """
+                SELECT node_type, description, example 
+                FROM node_types 
+                ORDER BY node_type
+            """
             
-            # 解析DSL内容，提取各个节点类型的定义
+            rows = await conn.fetch(query)
+            
+            if not rows:
+                logger.warning("数据库中没有找到节点类型数据")
+                return {}
+            
+            # 构建模板字典
             templates = {}
-            
-            # 分割不同的节点类型章节
-            sections = dsl_content.split('\n# ')
-            
-            for section in sections:
-                if not section.strip():
-                    continue
+            for row in rows:
+                node_type = row['node_type']
+                description = row['description']
+                example = row['example']  # JSONB类型，已经是dict
                 
-                # 提取节点类型名称
-                lines = section.split('\n')
-                if not lines:
-                    continue
-                
-                title = lines[0].strip()
-                
-                # 匹配节点类型
-                if '工作流开始节点' in title or 'Start Node' in title:
-                    templates['workflowStart'] = self._extract_section_content(section, 'workflowStart')
-                elif '工作流结束节点' in title or 'End Node' in title:
-                    templates['workflowEnd'] = self._extract_section_content(section, 'workflowEnd')
-                elif '批量处理节点' in title or 'Batch Node' in title:
-                    templates['batch'] = self._extract_section_content(section, 'batch')
-                elif '条件判断节点' in title or 'Condition Node' in title:
-                    templates['condition'] = self._extract_section_content(section, 'condition')
-                elif '工作流节点' in title and 'Workflow Node' in title:
-                    templates['workflow'] = self._extract_section_content(section, 'workflow')
-                elif '数据库查询节点' in title or 'DbQuery Node' in title:
-                    templates['dbQuery'] = self._extract_section_content(section, 'dbQuery')
-                elif '数据库创建节点' in title or 'DbCreate Node' in title:
-                    templates['dbCreate'] = self._extract_section_content(section, 'dbCreate')
-                elif '数据库更新节点' in title or 'DbUpdate Node' in title:
-                    templates['dbUpdate'] = self._extract_section_content(section, 'dbUpdate')
-                elif '数据库删除节点' in title or 'DbDelete Node' in title:
-                    templates['dbDelete'] = self._extract_section_content(section, 'dbDelete')
-                elif '数据库事务节点' in title or 'Transaction Node' in title:
-                    templates['transaction'] = self._extract_section_content(section, 'transaction')
-                elif '代码执行节点' in title or 'Code Node' in title:
-                    templates['code'] = self._extract_section_content(section, 'code')
-                elif 'HTTP请求节点' in title or 'HTTP Request Node' in title:
-                    templates['http'] = self._extract_section_content(section, 'http')
-                elif 'LLM对话节点' in title or 'LLM Node' in title:
-                    templates['chatWithLLM'] = self._extract_section_content(section, 'chatWithLLM')
+                # 构建完整的模板内容
+                template_content = self._build_template_content(node_type, description, example)
+                templates[node_type] = template_content
+                logger.info(templates)
             
-            logger.info(f"成功从dsl.md加载了 {len(templates)} 个节点模板")
+            logger.info(f"从数据库成功加载 {len(templates)} 个节点模板")
             return templates
             
         except Exception as e:
-            logger.error(f"加载DSL模板失败: {str(e)}")
-            return self._get_default_templates()
+            logger.error(f"数据库操作失败: {str(e)}")
+            return {}
+        finally:
+            if conn:
+                await conn.close()
+    
+    def _get_database_url(self) -> Optional[str]:
+        """获取数据库连接URL"""
+        try:
+            # 首先尝试直接获取DATABASE_URL
+            database_url = os.getenv('DATABASE_URL')
+            if database_url:
+                logger.info("使用环境变量 DATABASE_URL")
+                return database_url
+            
+            # 如果没有DATABASE_URL，则从各个组件构建
+            db_host = os.getenv('DATABASE_HOST', 'localhost')
+            db_port = os.getenv('DATABASE_PORT', '5432')
+            db_name = os.getenv('DATABASE_NAME', '')
+            db_user = os.getenv('DATABASE_USERNAME', '')
+            db_password = os.getenv('DATABASE_PASSWORD', '')
+            
+            # 检查必需的配置
+            if not all([db_name, db_user, db_password]):
+                logger.warning("数据库配置不完整，缺少必要的环境变量: DATABASE_NAME, DATABASE_USERNAME, DATABASE_PASSWORD")
+                return None
+            
+            # 构建连接URL
+            database_url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+            logger.info(f"构建数据库连接URL: postgresql://{db_user}:***@{db_host}:{db_port}/{db_name}")
+            return database_url
+            
+        except Exception as e:
+            logger.error(f"构建数据库URL失败: {str(e)}")
+            return None
+    
+    def _build_template_content(self, node_type: str, description: str, example: dict) -> str:
+        """构建节点模板内容"""
+        try:
+            template_content = f"""# {node_type.upper()} 节点
+
+## 描述
+{description}
+
+## 节点配置规范
+
+### 基本结构
+```json
+{{
+  "name": "节点名称",
+  "type": "{node_type}",
+  "desc": "节点描述",
+  "inputs": {{}},
+  "outputs": {{}},
+  "configs": {{}},
+  "nextNodes": []
+}}
+```
+
+## 配置示例
+```json
+{json.dumps(example, ensure_ascii=False, indent=2)}
+```
+
+## 重要说明
+- 节点名称必须使用英文且以大写字母开头，采用PascalCase格式
+- 所有必需字段都必须填写
+- configs字段包含节点特定的配置参数
+- nextNodes指定下一个要执行的节点名称列表"""
+
+            return template_content
+            
+        except Exception as e:
+            logger.error(f"构建模板内容失败: {str(e)}")
+            return f"# {node_type} 节点\n{description}"
     
     def _extract_section_content(self, section: str, node_type: str) -> str:
         """提取章节内容"""
