@@ -54,6 +54,7 @@ class AgentMessage:
 class SharedContext:
     """共享上下文"""
     user_requirement: str = ""
+    db_info: str = ""  # 添加数据库信息字段
     analyzed_nodes: List[Dict[str, Any]] = field(default_factory=list)
     node_generation_prompts: List[Dict[str, Any]] = field(default_factory=list)
     composed_workflow: Dict[str, Any] = field(default_factory=dict)
@@ -104,9 +105,9 @@ class SharedStateManager:
         """更新共享上下文"""
         async with self._lock:
             for key, value in updates.items():
-                if hasattr(self.context, key):
-                    setattr(self.context, key, value)
-                    logger.info(f"更新共享上下文: {key}")
+                # 直接设置属性，允许动态添加新字段
+                setattr(self.context, key, value)
+                logger.info(f"更新共享上下文: {key} = {str(value)[:100]}{'...' if len(str(value)) > 100 else ''}")
     
     async def get_context(self) -> SharedContext:
         """获取共享上下文"""
@@ -208,12 +209,13 @@ class MultiAgentOrchestrator:
         # 将在子类中实现具体的智能体
         pass
     
-    async def generate_workflow(self, user_requirement: str) -> Dict[str, Any]:
+    async def generate_workflow(self, user_requirement: str, db_info: str = "") -> Dict[str, Any]:
         """生成工作流的主要方法"""
         try:
             # 初始化共享上下文
             await self.state_manager.update_context({
                 "user_requirement": user_requirement,
+                "db_info": db_info,  # 添加数据库信息到共享上下文
                 "retry_count": 0
             })
             

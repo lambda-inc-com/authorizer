@@ -92,6 +92,7 @@ class AIStreamServiceImpl(ai_service_stream_pb2_grpc.AIStreamServiceServicer):
             
             # 从输入中获取需求描述
             requirement = request.inputs.get("requirement", "")
+            db =  request.inputs.get("connections", "")
             if not requirement:
                 yield ai_service_stream_pb2.StreamWorkflowResponse(
                     workflow_id="",
@@ -138,7 +139,7 @@ class AIStreamServiceImpl(ai_service_stream_pb2_grpc.AIStreamServiceServicer):
             
             try:
                 # 🎯 实现真正的流式生成
-                async for stage_update in self._stream_workflow_generation(requirement, progress_callback):
+                async for stage_update in self._stream_workflow_generation(requirement,db, progress_callback):
                     # 实时发送每个阶段的更新
                     yield ai_service_stream_pb2.StreamWorkflowResponse(
                         workflow_id=workflow_id,
@@ -331,7 +332,7 @@ class AIStreamServiceImpl(ai_service_stream_pb2_grpc.AIStreamServiceServicer):
             # 返回默认错误响应
             return f"抱歉，{model_name}服务暂时不可用。错误：{str(e)}"
     
-    async def _stream_workflow_generation(self, requirement: str, progress_callback):
+    async def _stream_workflow_generation(self, requirement: str,db: str, progress_callback):
         """流式工作流生成的核心方法 - 改进版本，支持真正的流式更新"""
         try:
             # 阶段1: 需求分析 (0% -> 30%)
@@ -425,7 +426,7 @@ class AIStreamServiceImpl(ai_service_stream_pb2_grpc.AIStreamServiceServicer):
             try:
                 # 创建一个异步任务来生成工作流
                 generation_task = asyncio.create_task(
-                    self.workflow_system.generate_workflow_from_requirement(requirement)
+                    self.workflow_system.generate_workflow_from_requirement(requirement,db)
                 )
                 
                 # 在等待生成完成时，持续发送心跳更新

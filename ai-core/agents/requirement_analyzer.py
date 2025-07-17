@@ -340,6 +340,55 @@ class RequirementAnalyzer(BaseAgent):
     async def _analyze_requirement_for_nodes(self, user_requirement: str) -> Dict[str, Any]:
         """第一阶段: 分析需求，确定需要的节点类型"""
         
+        # 从共享上下文获取数据库信息
+        context = await self.state_manager.get_context()
+        db_info = getattr(context, 'db_info', "")
+
+        # 如果提供了数据库信息，使用它；否则使用默认的硬编码信息
+        if db_info and db_info.strip():
+            # 使用传递的数据库表信息
+            try:
+                # 尝试解析JSON格式的数据库信息
+                import json
+                if db_info.strip().startswith('{'):
+                    # JSON格式
+                    db_config = json.loads(db_info)
+                    if isinstance(db_config, dict) and 'name' in db_config:
+                        # 如果是包含name字段的配置对象，提取name作为数据库表信息
+                        database_tables_info = db_config.get('name', '默认数据库表信息')
+                    else:
+                        # 直接使用JSON字符串作为数据库表信息
+                        database_tables_info = db_info
+                else:
+                    # 普通字符串格式
+                    database_tables_info = db_info
+                logger.info(f"使用动态传递的数据库表信息: {database_tables_info[:100]}...")
+            except Exception as e:
+                logger.warning(f"解析数据库信息失败，使用默认信息: {str(e)}")
+                database_tables_info = """- users: 用户表(id, username, email, password, real_name, phone, role, status)
+- categories: 商品分类表(id, parent_id, name, code, description)
+- suppliers: 供应商表(id, code, name, contact_person, phone, email)
+- customers: 客户表(id, code, name, type, contact_person, phone, email)
+- products: 商品表(id, sku, name, category_id, brand, model, cost_price, sale_price, current_stock)
+- warehouses: 仓库表(id, code, name, address, manager, phone)
+- inventory: 库存表(id, warehouse_id, product_id, quantity, available_quantity)
+- purchase_orders: 采购订单表(id, order_no, supplier_id, warehouse_id, total_amount, status)
+- sales_orders: 销售订单表(id, order_no, customer_id, warehouse_id, total_amount, status)
+- stock_movements: 库存变动记录表(id, warehouse_id, product_id, movement_type, quantity)"""
+        else:
+            # 使用默认的硬编码数据库表信息
+            database_tables_info = """- users: 用户表(id, username, email, password, real_name, phone, role, status)
+- categories: 商品分类表(id, parent_id, name, code, description)
+- suppliers: 供应商表(id, code, name, contact_person, phone, email)
+- customers: 客户表(id, code, name, type, contact_person, phone, email)
+- products: 商品表(id, sku, name, category_id, brand, model, cost_price, sale_price, current_stock)
+- warehouses: 仓库表(id, code, name, address, manager, phone)
+- inventory: 库存表(id, warehouse_id, product_id, quantity, available_quantity)
+- purchase_orders: 采购订单表(id, order_no, supplier_id, warehouse_id, total_amount, status)
+- sales_orders: 销售订单表(id, order_no, customer_id, warehouse_id, total_amount, status)
+- stock_movements: 库存变动记录表(id, warehouse_id, product_id, movement_type, quantity)"""
+            logger.info("使用默认硬编码的数据库表信息")
+
         system_prompt = """# 工作流需求分析专家
 
 你是一个专业的工作流需求分析专家，专门负责分析用户的业务需求，并识别出完成该需求所需的所有工作流节点类型。
@@ -395,16 +444,7 @@ class RequirementAnalyzer(BaseAgent):
 {user_requirement}
 
 **可用数据库表信息：**
-- users: 用户表(id, username, email, password, real_name, phone, role, status)
-- categories: 商品分类表(id, parent_id, name, code, description)
-- suppliers: 供应商表(id, code, name, contact_person, phone, email)
-- customers: 客户表(id, code, name, type, contact_person, phone, email)
-- products: 商品表(id, sku, name, category_id, brand, model, cost_price, sale_price, current_stock)
-- warehouses: 仓库表(id, code, name, address, manager, phone)
-- inventory: 库存表(id, warehouse_id, product_id, quantity, available_quantity)
-- purchase_orders: 采购订单表(id, order_no, supplier_id, warehouse_id, total_amount, status)
-- sales_orders: 销售订单表(id, order_no, customer_id, warehouse_id, total_amount, status)
-- stock_movements: 库存变动记录表(id, warehouse_id, product_id, movement_type, quantity)
+{database_tables_info}
 
 请按照分析原则，仔细分析用户需求，并按照指定的JSON格式输出结果。"""
         
@@ -416,7 +456,7 @@ class RequirementAnalyzer(BaseAgent):
         response = await self.llm_client.chat_completion(
                 messages=messages,
                 temperature=0.3,
-                max_tokens=2000
+                max_tokens=8000
             )
             
         return self._parse_llm_response(response)

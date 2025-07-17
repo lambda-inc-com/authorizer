@@ -439,12 +439,41 @@ func (h *AIStreamHandler) StreamWorkflowGenerateHandler() gin.HandlerFunc {
 			"requirement": request.Requirement,
 		}
 		for k, v := range request.Config {
-			// 安全的类型转换：将 interface{} 转换为 string
-			if str, ok := v.(string); ok {
-				inputs[k] = str
+			// 特殊处理connections参数
+			if k == "connections" {
+				// connections参数可能是JSON对象，需要特殊处理
+				if connectionsMap, ok := v.(map[string]interface{}); ok {
+					// 如果connections是一个map，尝试提取其中的数据库表信息
+					if dbInfo, exists := connectionsMap["name"]; exists {
+						// 如果有name字段，使用name字段作为数据库表信息
+						inputs[k] = fmt.Sprintf("%v", dbInfo)
+					} else {
+						// 如果没有name字段，将整个JSON序列化
+						if jsonBytes, err := json.Marshal(connectionsMap); err == nil {
+							inputs[k] = string(jsonBytes)
+						} else {
+							inputs[k] = fmt.Sprintf("%v", v)
+						}
+					}
+				} else if str, ok := v.(string); ok {
+					// 如果connections已经是字符串，直接使用
+					inputs[k] = str
+				} else {
+					// 其他情况，尝试JSON序列化
+					if jsonBytes, err := json.Marshal(v); err == nil {
+						inputs[k] = string(jsonBytes)
+					} else {
+						inputs[k] = fmt.Sprintf("%v", v)
+					}
+				}
 			} else {
-				// 如果不是 string 类型，使用 fmt.Sprintf 转换
-				inputs[k] = fmt.Sprintf("%v", v)
+				// 其他参数的常规处理
+				if str, ok := v.(string); ok {
+					inputs[k] = str
+				} else {
+					// 如果不是 string 类型，使用 fmt.Sprintf 转换
+					inputs[k] = fmt.Sprintf("%v", v)
+				}
 			}
 		}
 
