@@ -78,7 +78,7 @@ RUN echo '#!/bin/sh' > /authorizer/start.sh && \
     echo 'echo "Python AI service started with PID: $AI_PID"' >> /authorizer/start.sh && \
     echo '' >> /authorizer/start.sh && \
     echo '# 等待AI服务启动' >> /authorizer/start.sh && \
-    echo 'sleep 3' >> /authorizer/start.sh && \
+    echo 'sleep 10' >> /authorizer/start.sh && \
     echo '' >> /authorizer/start.sh && \
     echo '# 启动Go服务（前台运行）' >> /authorizer/start.sh && \
     echo 'echo "Starting Go server..."' >> /authorizer/start.sh && \
