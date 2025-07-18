@@ -59,6 +59,7 @@ class LLMClient:
                     logger.debug(f"环境变量 {env_var} 未设置")
                     return None
                 config["api_key"] = api_key
+                logger.debug(f"环境变量 : {api_key} ")
 
             # 检查必要字段
             if not config.get("api_key") or not config.get("is_enabled", False):
