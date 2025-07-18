@@ -13,6 +13,7 @@ import os
 import asyncio
 import asyncpg
 from dotenv import load_dotenv
+from node_type_manager import node_type_manager
 
 # 加载环境变量
 load_dotenv("../../server/.env")  # server目录 (优先)
@@ -132,8 +133,8 @@ class RequirementAnalyzer(BaseAgent):
         # 如果数据库加载失败，使用默认模板
         return self._get_default_templates()
 
-    async def _load_templates_from_db(self) -> Dict[str, str]:
-        """从数据库异步加载节点模板"""
+    async def _load_node_dsl_from_db(self) -> Dict[str, Dict[str, Any]]:
+        """从数据库加载所有节点DSL数据"""
         conn = None
         try:
             # 获取数据库连接配置
@@ -145,9 +146,9 @@ class RequirementAnalyzer(BaseAgent):
             # 连接数据库
             conn = await asyncpg.connect(database_url)
             
-            # 查询节点类型模板
+            # 查询所有节点类型数据
             query = """
-                SELECT node_type, description, example 
+                SELECT id, node_type, description, example, schema, created_at, updated_at
                 FROM node_types 
                 ORDER BY node_type
             """
@@ -158,20 +159,27 @@ class RequirementAnalyzer(BaseAgent):
                 logger.warning("数据库中没有找到节点类型数据")
                 return {}
             
-            # 构建模板字典
-            templates = {}
+            # 构建节点DSL数据字典
+            node_dsl_data = {}
             for row in rows:
                 node_type = row['node_type']
-                description = row['description']
-                example = row['example']  # JSONB类型，已经是dict
+                node_data = {
+                    "id": row['id'],
+                    "node_type": node_type,
+                    "description": row['description'],
+                    "example": row['example'],  # JSONB类型，已经是dict
+                    "schema": row['schema'] if row['schema'] else {},  # JSONB类型
+                    "created_at": row['created_at'].isoformat() if row['created_at'] else None,
+                    "updated_at": row['updated_at'].isoformat() if row['updated_at'] else None,
+                    # 为了兼容性，保留原有的template_content格式
+                    "template_content": self._build_template_content(node_type, row['description'], row['example'])
+                }
                 
-                # 构建完整的模板内容
-                template_content = self._build_template_content(node_type, description, example)
-                templates[node_type] = template_content
-                logger.debug(f"加载模板: {node_type}")
+                node_dsl_data[node_type] = node_data
+                logger.debug(f"加载节点DSL: {node_type}")
             
-            logger.info(f"从数据库成功加载 {len(templates)} 个节点模板")
-            return templates
+            logger.info(f"从数据库成功加载 {len(node_dsl_data)} 个节点DSL数据")
+            return node_dsl_data
             
         except Exception as e:
             logger.error(f"数据库操作失败: {str(e)}")
@@ -179,6 +187,32 @@ class RequirementAnalyzer(BaseAgent):
         finally:
             if conn:
                 await conn.close()
+
+    async def _load_templates_from_db(self) -> Dict[str, str]:
+        """从数据库异步加载节点模板（兼容性方法）"""
+        try:
+            # 从共享上下文获取节点DSL数据
+            context = await self.state_manager.get_context()
+            node_dsl_data = getattr(context, 'node_dsl_data', {})
+            
+            if node_dsl_data:
+                # 如果共享上下文中有DSL数据，直接使用
+                templates = {}
+                for node_type, data in node_dsl_data.items():
+                    templates[node_type] = data.get('template_content', '')
+                logger.info(f"从共享上下文获取 {len(templates)} 个节点模板")
+                return templates
+            else:
+                # 如果共享上下文中没有DSL数据，从数据库查询
+                node_dsl_data = await self._load_node_dsl_from_db()
+                templates = {}
+                for node_type, data in node_dsl_data.items():
+                    templates[node_type] = data.get('template_content', '')
+                return templates
+                
+        except Exception as e:
+            logger.error(f"加载节点模板失败: {str(e)}")
+            return self._get_default_templates()
 
     async def _load_templates_from_db_async(self) -> Dict[str, str]:
         """异步方式从数据库加载模板（推荐使用）"""
@@ -188,6 +222,189 @@ class RequirementAnalyzer(BaseAgent):
             logger.error(f"异步加载数据库模板失败: {str(e)}")
             return self._get_default_templates()
     
+    async def _load_and_cache_node_dsl_data(self):
+        """加载节点DSL数据并缓存到共享上下文中"""
+        try:
+            # 检查共享上下文中是否已有节点DSL数据
+            context = await self.state_manager.get_context()
+            existing_dsl_data = getattr(context, 'node_dsl_data', {})
+            
+            if existing_dsl_data:
+                logger.info(f"共享上下文中已存在 {len(existing_dsl_data)} 个节点DSL数据，跳过重复加载")
+                return
+            
+            logger.info("🔍 开始从数据库加载节点DSL数据...")
+            
+            # 从数据库加载节点DSL数据
+            node_dsl_data = await self._load_node_dsl_from_db()
+            
+            if node_dsl_data:
+                # 将节点DSL数据存储到共享上下文中
+                await self.state_manager.update_context({
+                    "node_dsl_data": node_dsl_data
+                })
+                
+                # 🎯 更新节点类型管理器（使用完整DSL数据）
+                node_type_manager.update_from_database(node_dsl_data)
+                
+                logger.info(f"✅ 成功加载并缓存 {len(node_dsl_data)} 个节点DSL数据到共享上下文")
+                logger.info(f"📋 已加载的节点类型: {', '.join(node_dsl_data.keys())}")
+                logger.info(f"🔄 已更新节点类型管理器，可用类型: {', '.join(node_type_manager.get_all_available_types())}")
+                
+            else:
+                logger.warning("⚠️ 未能从数据库加载节点DSL数据，将使用默认模板")
+                # 使用默认模板作为备选方案
+                default_templates = self._get_default_templates()
+                default_dsl_data = {}
+                for node_type, template_content in default_templates.items():
+                    default_dsl_data[node_type] = {
+                        "node_type": node_type,
+                        "description": f"默认{node_type}节点",
+                        "example": {},
+                        "schema": {},
+                        "template_content": template_content
+                    }
+                
+                await self.state_manager.update_context({
+                    "node_dsl_data": default_dsl_data
+                })
+                
+        except Exception as e:
+            logger.error(f"❌ 加载节点DSL数据失败: {str(e)}")
+            # 发生错误时，使用默认模板
+            try:
+                default_templates = self._get_default_templates()
+                default_dsl_data = {}
+                for node_type, template_content in default_templates.items():
+                    default_dsl_data[node_type] = {
+                        "node_type": node_type,
+                        "description": f"默认{node_type}节点",
+                        "example": {},
+                        "schema": {},
+                        "template_content": template_content
+                    }
+                
+                await self.state_manager.update_context({
+                    "node_dsl_data": default_dsl_data
+                })
+                
+                logger.info("✅ 已使用默认模板作为备选方案")
+                
+            except Exception as fallback_error:
+                logger.error(f"❌ 使用默认模板失败: {str(fallback_error)}")
+
+    async def _generate_node_special_requirements(self, node_type: str, user_requirement: str) -> str:
+        """根据节点类型动态生成特殊要求 - 使用数据库DSL数据"""
+        try:
+            # 从共享上下文获取节点DSL数据
+            context = await self.state_manager.get_context()
+            node_dsl_data = getattr(context, 'node_dsl_data', {})
+            
+            # 检查是否有该节点类型的DSL数据
+            if node_type in node_dsl_data:
+                dsl_data = node_dsl_data[node_type]
+                description = dsl_data.get('description', '')
+                example = dsl_data.get('example', {})
+                
+                # 基于DSL数据生成特殊要求
+                requirements = f"""
+## ⚠️ {node_type.upper()}节点特殊要求 ⚠️
+
+**节点描述**：{description.split('。')[0]}。
+
+"""
+                
+                # 根据节点类型特征添加通用要求
+                if node_type_manager.is_start_node(node_type):
+                    requirements += """
+**开始节点特殊要求**：
+1. **configs设置为空对象{{}}** - 此节点类型无需特殊配置
+2. **outputs设置为空对象{{}}** - 此节点类型不产生输出数据
+3. **inputs字段** - 用于定义工作流的初始输入参数
+4. **nextNodes** - 指向下一个要执行的节点"""
+                
+                elif node_type_manager.is_end_node(node_type):
+                    requirements += """
+**结束节点特殊要求**：
+1. **nextNodes必须设置为空数组[]** - 因为这是工作流的终点！
+2. **configs设置为空对象{{}}** - 此节点类型无需特殊配置
+3. **必须包含标准API响应字段**：
+   - code: HTTP状态码（数字类型）
+   - data: 响应数据（字符串、对象或数组类型）  
+   - message: 响应消息（字符串类型）"""
+                
+                elif "db" in node_type.lower():
+                    requirements += """
+**数据库节点特殊要求**：
+1. **configs必须包含**：
+   - table: 表名称（字符串）
+   - sql: SQL语句（字符串，支持变量引用）
+2. **outputs字段已固定**，请基于节点类型设置适当的输出字段"""
+                
+                elif "http" in node_type.lower():
+                    requirements += """
+**HTTP节点特殊要求**：
+1. **configs必须包含**：
+   - method: 请求方法（GET/POST/PUT/DELETE等）
+   - url: 请求URL（字符串）
+   - bodyType: 请求体类型（none/json/form-data/text）
+2. **outputs字段已固定**，不需要设置value字段"""
+                
+                elif "condition" in node_type.lower():
+                    requirements += """
+**条件节点特殊要求**：
+1. **不包含nextNodes字段** - 条件节点的流向由条件配置决定
+2. **不包含outputs字段** - 条件节点不产生数据输出
+3. **configs必须包含conditionGroups** - 条件组配置（数组类型）"""
+                
+                elif "llm" in node_type.lower() or "chat" in node_type.lower():
+                    requirements += """
+**LLM节点特殊要求**：
+1. **configs必须包含**：
+   - modelId: 模型ID（字符串）
+2. **outputs字段已固定**，不需要设置value字段"""
+                
+                else:
+                    # 通用节点要求
+                    requirements += """
+**通用节点要求**：
+1. **configs** - 根据节点功能设置相应配置
+2. **outputs** - 设置适当的输出字段
+3. **nextNodes** - 指向下一个执行的节点"""
+                
+                # 如果有示例，添加示例参考
+                if example:
+                    requirements += f"""
+
+**节点示例参考**：
+```json
+{json.dumps(example, ensure_ascii=False, indent=2)}
+```"""
+                
+                return requirements
+            
+            else:
+                # 如果数据库中没有该节点类型，使用通用要求
+                return f"""
+## ⚠️ {node_type.upper()}节点要求 ⚠️
+
+**注意**: 该节点类型在数据库中未找到具体DSL定义，请参考通用节点规范：
+
+1. **必填字段**: name, type, desc, inputs, outputs, configs, nextNodes
+2. **configs**: 根据节点功能设置相应配置
+3. **outputs**: 设置适当的输出字段类型和描述
+4. **nextNodes**: 指向下一个要执行的节点名称数组
+
+请确保生成的JSON格式正确且完整。"""
+                
+        except Exception as e:
+            logger.error(f"生成节点特殊要求失败: {str(e)}")
+            return f"""
+## ⚠️ {node_type.upper()}节点基本要求 ⚠️
+
+1. **必填字段**: name, type, desc, inputs, outputs, configs, nextNodes
+2. **请参考节点类型的通用规范进行配置**"""
+
     def _get_database_url(self) -> Optional[str]:
         """获取数据库连接URL"""
         try:
@@ -227,20 +444,6 @@ class RequirementAnalyzer(BaseAgent):
 ## 描述
 {description}
 
-## 节点配置规范
-
-### 基本结构
-```json
-{{
-  "name": "节点名称",
-  "type": "{node_type}",
-  "desc": "节点描述",
-  "inputs": {{}},
-  "outputs": {{}},
-  "configs": {{}},
-  "nextNodes": []
-}}
-```
 
 ## 配置示例
 ```json
@@ -287,6 +490,9 @@ class RequirementAnalyzer(BaseAgent):
     async def process_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """处理需求分析任务 - 增强版流程"""
         try:
+            # 🎯 首先加载节点DSL数据到共享上下文（所有阶段共享使用）
+            await self._load_and_cache_node_dsl_data()
+            
             # 确保数据库模板已加载
             await self._ensure_db_templates_loaded()
             
@@ -389,7 +595,13 @@ class RequirementAnalyzer(BaseAgent):
 - stock_movements: 库存变动记录表(id, warehouse_id, product_id, movement_type, quantity)"""
             logger.info("使用默认硬编码的数据库表信息")
 
-        system_prompt = """# 工作流需求分析专家
+        # 🎯 动态生成可用节点类型列表（基于数据库DSL数据）
+        available_node_types = node_type_manager.generate_available_node_types_for_llm()
+        if not available_node_types:
+            logger.warning("⚠️ 无法生成可用节点类型列表，使用基本默认列表")
+            available_node_types = "- **通用节点**: 请根据需求选择合适的节点类型"
+
+        system_prompt = f"""# 工作流需求分析专家
 
 你是一个专业的工作流需求分析专家，专门负责分析用户的业务需求，并识别出完成该需求所需的所有工作流节点类型。
 
@@ -400,42 +612,30 @@ class RequirementAnalyzer(BaseAgent):
 4. 确保节点的选择合理且完整
 
 ## 可用节点类型
-- **workflowStart**: 工作流开始节点（必需）
-- **workflowEnd**: 工作流结束节点（必需）  
-- **dbQuery**: 数据库查询节点
-- **dbCreate**: 数据库创建节点
-- **dbUpdate**: 数据库更新节点
-- **dbDelete**: 数据库删除节点
-- **http**: HTTP请求节点
-- **chatWithLLM**: LLM对话节点
-- **condition**: 条件判断节点
-- **code**: 代码执行节点
-- **transaction**: 数据库事务节点
-- **batch**: 批量处理节点
-- **workflow**: 工作流节点
+{available_node_types}
 
 ## 输出格式
 请严格按照以下JSON格式输出：
 ```json
-{
-  "analysis": {
+{{
+  "analysis": {{
     "requirement_summary": "需求总结",
     "key_actions": ["关键行为1", "关键行为2"],
     "data_entities": ["数据实体1", "数据实体2"],
     "business_rules": ["业务规则1", "业务规则2"]
-  },
+  }},
   "required_node_types": [
-    {
+    {{
       "type": "节点类型",
       "purpose": "节点用途说明",
       "context": "在当前业务需求中的作用",
       "suggested_name": "建议的节点名称",
       "priority": 1,
       "dependencies": ["依赖的其他节点类型"]
-    }
+    }}
   ],
   "workflow_complexity": "简单/中等/复杂"
-}
+}}
 ```"""
     
         user_prompt = f"""请分析以下用户需求，并识别出完成该需求所需的所有工作流节点类型：
@@ -472,13 +672,14 @@ class RequirementAnalyzer(BaseAgent):
             # 获取该节点类型的DSL模板
             dsl_template = self.dsl_templates.get(node_type, "")
             
-            # 生成专门的提示词
+            # 生成专门的提示词（此阶段还没有前置节点配置，会在实际生成时动态更新）
             prompt = await self._create_node_generation_prompt(
                 node_type=node_type,
                 node_info=node_info,
                 user_requirement=user_requirement,
                 dsl_template=dsl_template,
-                business_context=node_analysis["analysis"]
+                business_context=node_analysis["analysis"],
+                previous_node_configs=[]  # 初始为空，在实际生成时会动态更新
             )
             
             node_prompts.append({
@@ -498,125 +699,11 @@ class RequirementAnalyzer(BaseAgent):
     
     async def _create_node_generation_prompt(self, node_type: str, node_info: Dict[str, Any], 
                                            user_requirement: str, dsl_template: str, 
-                                           business_context: Dict[str, Any]) -> str:
+                                           business_context: Dict[str, Any], 
+                                           previous_node_configs: List[Dict[str, Any]] = None) -> str:
         """为特定节点类型创建生成提示词"""
         
-        # 根据节点类型添加特殊要求
-        special_requirements = ""
-        if node_type == "workflowStart":
-            special_requirements = """
-## ⚠️ workflowStart节点特殊要求 ⚠️
-1. **configs设置为空对象{}** - 此节点类型无需特殊配置
-2. **outputs设置为空对象{}** - 此节点类型不产生输出数据
-3. **inputs字段** - 用于定义工作流的初始输入参数
-4. **nextNodes** - 指向下一个要执行的节点"""
-        elif node_type == "workflowEnd":
-            special_requirements = """
-## ⚠️ workflowEnd节点特殊要求 ⚠️
-1. **nextNodes必须设置为空数组[]** - 因为这是工作流的终点！
-2. **configs设置为空对象{}** - 此节点类型无需特殊配置
-3. **必须包含标准API响应字段**：
-   - code: HTTP状态码（数字类型）
-   - data: 响应数据（字符串、对象或数组类型）  
-   - message: 响应消息（字符串类型）
-4. **outputs字段示例**：
-```json
-"outputs": {
-  "code": {
-    "type": "number",
-    "value": "200",
-    "desc": "HTTP状态码"
-  },
-  "data": {
-    "type": "string", 
-    "value": "$.PrevNode.outputs.result",
-    "desc": "响应数据"
-  },
-  "message": {
-    "type": "string",
-    "value": "操作成功",
-    "desc": "响应消息"
-  }
-}
-```"""
-        elif node_type.startswith("db"):
-            special_requirements = f"""
-## ⚠️ {node_type}节点特殊要求 ⚠️
-1. **configs必须包含**：
-   - table: 表名称（字符串）
-   - sql: SQL语句（字符串，支持变量引用）
-2. **outputs字段已固定**，不需要设置value字段：
-   {"- affected: 影响的行数（数字类型）" if node_type != "dbQuery" else "- affected: 查询返回的行数（数字类型）"}
-   {"- data: 查询结果数据（数组类型）" if node_type == "dbQuery" else ""}
-   {"- insertId: 新插入记录的ID（字符串类型）" if node_type == "dbCreate" else ""}"""
-        elif node_type == "http":
-            special_requirements = """
-## ⚠️ HTTP节点特殊要求 ⚠️
-1. **configs必须包含**：
-   - method: 请求方法（GET/POST/PUT/DELETE等）
-   - url: 请求URL（字符串）
-   - bodyType: 请求体类型（none/json/form-data/text）
-2. **outputs字段已固定**，不需要设置value字段：
-   - code: HTTP状态码（数字类型）
-   - data: 响应数据（对象类型）"""
-        elif node_type == "chatWithLLM":
-            special_requirements = """
-## ⚠️ LLM节点特殊要求 ⚠️
-1. **configs必须包含**：
-   - modelId: 模型ID（字符串）
-2. **outputs字段已固定**，不需要设置value字段：
-   - thinking: AI思考过程（字符串类型）
-   - response: AI生成的回复（字符串类型）
-   - tokens: Token使用情况（对象类型）"""
-        elif node_type == "condition":
-            special_requirements = """
-## ⚠️ Condition节点特殊要求 ⚠️
-1. **configs必须包含**：
-   - conditionGroups: 条件组配置（数组）
-   - defaultNextNode: 默认跳转节点（字符串，可选）
-2. **不需要nextNodes字段** - 条件节点不设置nextNodes数组，流向由条件配置决定
-3. **不需要outputs字段** - 条件节点不产生数据输出
-4. **条件组配置要求**：
-   - conditions: 单个条件组内的条件列表
-   - relationship: 条件组内的逻辑关系 (AND/OR)
-   - nextNode: 条件满足时跳转的节点ID
-5. **支持的操作符**：
-   - equal, notEqual, greaterThan, greaterThanEqual, lessThan, lessThanEqual
-   - isNull, isNotNull, include, notInclude
-6. **变量引用格式**：使用`$.节点名.inputs.字段名`格式引用数据"""
-        elif node_type == "batch":
-            special_requirements = """
-## ⚠️ Batch节点特殊要求 ⚠️
-1. **configs必须包含**：
-   - mapConfig: Map配置（包含dataSource等）
-   - reduceConfig: Reduce配置（包含strategy等）
-   - child: 子节点完整配置（对象）
-2. **outputs字段已固定**，不需要设置value字段"""
-        elif node_type == "transaction":
-            special_requirements = """
-## ⚠️ Transaction节点特殊要求 ⚠️
-1. **configs必须包含**：
-   - isolation: 事务隔离级别（可选，默认READ_COMMITTED）
-   - timeout: 事务超时时间（可选，默认60秒）
-   - children: 子节点数组（必填，每个子节点包含完整配置和order字段）
-2. **outputs字段已固定**，不需要设置value字段：
-   - committed: 事务是否成功提交（布尔类型）
-   - affectedTotal: 事务中所有操作影响的总行数（数字类型）
-   - childResults: 所有子节点的执行结果数组（数组类型）
-   - executionTime: 事务执行耗时（数字类型）
-3. **子节点配置要求**：
-   - name: 子节点名称（必填）
-   - type: 节点类型（必填，只支持dbCreate、dbUpdate、dbDelete）
-   - desc: 节点描述（必填）
-   - order: 执行顺序（必填，从1开始）
-   - inputs: 节点输入参数（可选）
-   - outputs: 节点输出参数（必填）
-   - configs: 节点配置（必填，包含table和sql）
-4. **重要提示**：
-   - 子节点的order必须唯一且连续，从1开始
-   - 子节点间可以通过$.节点名.inputs.字段名引用事务节点的输入参数
-   - 避免生成过多的子节点，建议不超过4个子节点
-   - 确保JSON格式正确，避免截断"""
+        # 获取特殊要求 - 使用数据库DSL数据动态生成
         
         base_prompt = f"""# {node_type.upper()} 节点生成专家
 
@@ -633,7 +720,6 @@ class RequirementAnalyzer(BaseAgent):
 **关键行为**: {', '.join(business_context['key_actions'])}
 **数据实体**: {', '.join(business_context['data_entities'])}
 **业务规则**: {', '.join(business_context['business_rules'])}
-{special_requirements}
 
 ## 节点DSL规范
 {dsl_template}
@@ -648,29 +734,315 @@ class RequirementAnalyzer(BaseAgent):
 7. **唯一性**: 节点名称必须唯一，不能与其他节点重复
 8. **引用准确性**: 所有数据引用必须使用实际存在的节点名称，禁止使用虚构的节点名称
 
+## 🚨 输入参数映射 - 必须遵循的规则
+
+**如果当前节点有前置节点，且当前节点有input项目则必须在inputs字段中正确引用前置节点的输出：**
+
+⚠️ **特别注意**: condition节点不使用inputs字段！condition节点通过configs.conditionGroups.conditions中的left字段引用前置节点数据。
+
+**对于非condition节点**:
+1. **必须使用正确的引用格式**: `"value": "$.NodeName.outputs.fieldName"`
+2. **必须使用实际存在的字段**: 不能虚构字段名，严格按照节点类型的标准输出
+3. **数据库节点特殊要求**: 只能引用 `data` 和 `affected` 字段
+4. **必须包含type和desc**: 每个input字段都要有type和desc属性
+
+## 🚨 数据库查询结果正确引用方式（重要）
+
+**数据库查询节点的两个固定输出字段**:
+- `affected`: 查询影响的行数（数字类型）- 用于存在性检查
+- `data`: 查询结果数组（数组类型）- 包含实际的数据记录
+
+**正确的引用方式**:
+✅ **存在性检查**: `$.QuerySupplier.{{outputs}}.affected` (判断是否查询到结果)
+✅ **获取具体ID**: `$.QuerySupplier.{{outputs}}.data[0].id` (从结果中获取供应商ID)
+✅ **获取具体字段**: `$.QuerySupplier.{{outputs}}.data[0].name` (从结果中获取供应商名称)
+
+**错误的引用方式**:
+❌ **错误**: `"supplierId": {{"value": "$.QuerySupplier.{{outputs}}.affected"}}` (affected是数字，不是ID)
+❌ **错误**: `"supplierName": {{"value": "$.QuerySupplier.{{outputs}}.supplier"}}` (supplier字段不存在)
+
+**具体字段引用规则**:
+- 需要ID时: 使用 `$.NodeName.{{outputs}}.data[0].id`
+- 需要名称时: 使用 `$.NodeName.{{outputs}}.data[0].name` 
+- 需要其他字段: 使用 `$.NodeName.{{outputs}}.data[0].fieldName`
+- 需要判断存在性: 使用 `$.NodeName.{{outputs}}.affected > 0`
+
+**错误示例** (禁止这样做):
+```json
+// ❌ 错误1: 空的inputs，没有引用前置节点
+"inputs": {{{{}}}}
+
+// ❌ 错误2: 引用不存在的字段
+"inputs": {{{{
+  "supplier": {{{{"value": "$.QuerySupplier.{{outputs}}.supplier"}}}}
+}}}}
+
+// ❌ 错误3: 用affected作为ID（类型不匹配）
+"inputs": {{{{
+  "supplierId": {{{{"value": "$.QuerySupplier.{{outputs}}.affected"}}}}
+}}}}
+```
+
+**正确示例** (应该这样做):
+```json
+// ✅ 正确: 从数据库查询结果中获取具体字段
+"inputs": {{{{
+  "supplierId": {{{{
+    "type": "string",
+    "value": "$.QuerySupplier.{{outputs}}.data[0].id",
+    "desc": "供应商ID（从查询结果中获取）"
+  }}}},
+  "supplierName": {{{{
+    "type": "string", 
+    "value": "$.QuerySupplier.{{outputs}}.data[0].name",
+    "desc": "供应商名称（从查询结果中获取）"
+  }}}},
+  "affectedRows": {{{{
+    "type": "number",
+    "value": "$.QuerySupplier.{{outputs}}.affected", 
+    "desc": "查询影响的行数（用于存在性检查）"
+  }}}}
+}}}}
+```
+
+**基于前置节点的正确示例**:
+（此部分将在实际生成时基于真实前置节点配置动态生成）
+
 ## 输出格式
 请直接输出完整的JSON节点配置，不要包含任何额外的说明文字：
 
-```json
-{{
-  "name": "NodeName",
-  "type": "{node_type}",
-  "desc": "节点描述",
-  "inputs": {{}},
-  "outputs": {{}},
-  "configs": {{}},
-  "nextNodes": []
-}}
-```
 
 请确保输出的JSON格式完全正确，可以直接解析使用。
 **特别注意**: 节点名称必须使用英文且以大写字母开头，采用PascalCase格式，如 "QuerySupplier", "CreateUser", "CheckUserExists"。确保节点名称唯一，不与其他节点重复。"""
         
         return base_prompt
     
+    def _generate_real_inputs_example(self, previous_node_configs: List[Dict[str, Any]], node_type: str = "") -> str:
+        """基于真实的前置节点配置生成inputs示例"""
+        try:
+            # 🎯 特殊处理：condition节点不需要inputs字段
+            if node_type and "condition" in node_type.lower():
+                if previous_node_configs:
+                    latest_node = previous_node_configs[-1]
+                    node_name = latest_node.get('name', 'PreviousNode')
+                    outputs = latest_node.get('config', {}).get('outputs', {})
+                    
+                    if outputs:
+                        # 基于真实前置节点生成condition示例
+                        first_output_field = list(outputs.keys())[0]
+                        return f"""**condition节点特殊说明**:
+根据DSL规范，condition节点不需要inputs字段，数据通过configs.conditionGroups中的conditions进行引用：
+
+前置节点 `{node_name}` 的实际outputs:
+```json
+{json.dumps(outputs, ensure_ascii=False, indent=2)}
+```
+
+**对应的condition配置示例**:
+```json
+{{
+  "configs": {{
+    "conditionGroups": [
+      {{
+        "conditions": [
+          {{
+            "left": "$.{node_name}.outputs.{first_output_field}",
+            "operator": "greaterThan", 
+            "right": 0
+          }}
+        ],
+        "relationship": "AND",
+        "nextNode": "NextNodeName"
+      }}
+    ],
+    "defaultNextNode": "DefaultNodeName"
+  }}
+}}
+```
+
+**重要**: condition节点通过configs.conditionGroups.conditions中的left字段引用前置节点数据，不使用inputs字段。"""
+                    else:
+                        return f"""**condition节点特殊说明**:
+根据DSL规范，condition节点不需要inputs字段。前置节点 `{node_name}` 没有outputs，可引用其inputs：
+
+```json
+{{
+  "configs": {{
+    "conditionGroups": [
+      {{
+        "conditions": [
+          {{
+            "left": "$.{node_name}.inputs.fieldName",
+            "operator": "equal", 
+            "right": "expectedValue"
+          }}
+        ],
+        "relationship": "AND",
+        "nextNode": "NextNodeName"
+      }}
+    ],
+    "defaultNextNode": "DefaultNodeName"
+  }}
+}}
+```
+
+**重要**: condition节点通过configs.conditionGroups.conditions中的left字段引用前置节点数据，不使用inputs字段。"""
+                else:
+                    return """**condition节点特殊说明**:
+根据DSL规范，condition节点不需要inputs字段，数据通过configs.conditionGroups中的conditions进行引用：
+
+```json
+{
+  "configs": {
+    "conditionGroups": [
+      {
+        "conditions": [
+          {
+            "left": "$.PreviousNode.outputs.fieldName",
+            "operator": "greaterThan", 
+            "right": 0
+          }
+        ],
+        "relationship": "AND",
+        "nextNode": "NextNodeName"
+      }
+    ],
+    "defaultNextNode": "DefaultNodeName"
+  }
+}
+```
+
+**重要**: condition节点通过configs.conditionGroups.conditions中的left字段引用前置节点数据，不使用inputs字段。"""
+
+            if not previous_node_configs:
+                return """**当前是第一个节点**，无需引用前置节点，inputs用于定义工作流的初始输入参数:
+```json
+"inputs": {{{{
+  "parameters": {{{{
+    "type": "object",
+    "desc": "工作流输入参数"
+  }}}}
+}}}}
+```"""
+            
+            # 获取最近的前置节点
+            latest_node = previous_node_configs[-1]
+            node_name = latest_node.get('name', 'PreviousNode')
+            node_config = latest_node.get('config', {})
+            outputs = node_config.get('outputs', {})
+            
+            if not outputs:
+                return f"""**前置节点 `{node_name}` 没有outputs字段**，请根据节点类型设置合适的inputs:
+```json
+"inputs": {{{{
+  "workflowParams": {{{{
+    "type": "object",
+    "value": "$.{node_name}.inputs.parameters",
+    "desc": "来自前置节点的参数"
+  }}}}
+}}}}
+```"""
+            
+            # 基于真实的前置节点outputs生成inputs示例
+            example_inputs = {}
+            for output_field, output_info in outputs.items():
+                field_type = output_info.get('type', 'object')
+                field_desc = output_info.get('desc', f'来自{node_name}的{output_field}数据')
+                
+                # 生成合适的input字段名
+                input_field_name = self._generate_input_field_name(output_field, node_name)
+                
+                # 🎯 特殊处理数据库查询节点的data字段
+                if output_field == "data" and "query" in node_name.lower():
+                    # 为数据库查询结果提供具体的字段访问示例
+                    example_inputs[input_field_name] = {
+                        "type": field_type,
+                        "value": f"$.{node_name}.outputs.{output_field}",
+                        "desc": f"{field_desc}（完整数组）"
+                    }
+                    
+                    # 添加具体字段访问示例
+                    if "supplier" in node_name.lower():
+                        example_inputs["supplierId"] = {
+                            "type": "string",
+                            "value": f"$.{node_name}.outputs.data[0].id",
+                            "desc": "供应商ID（从查询结果中获取）"
+                        }
+                        example_inputs["supplierName"] = {
+                            "type": "string", 
+                            "value": f"$.{node_name}.outputs.data[0].name",
+                            "desc": "供应商名称（从查询结果中获取）"
+                        }
+                    elif "product" in node_name.lower():
+                        example_inputs["productId"] = {
+                            "type": "string",
+                            "value": f"$.{node_name}.outputs.data[0].id", 
+                            "desc": "商品ID（从查询结果中获取）"
+                        }
+                        example_inputs["productName"] = {
+                            "type": "string",
+                            "value": f"$.{node_name}.outputs.data[0].name",
+                            "desc": "商品名称（从查询结果中获取）"
+                        }
+                    elif "user" in node_name.lower():
+                        example_inputs["userId"] = {
+                            "type": "string",
+                            "value": f"$.{node_name}.outputs.data[0].id",
+                            "desc": "用户ID（从查询结果中获取）"
+                        }
+                        example_inputs["username"] = {
+                            "type": "string",
+                            "value": f"$.{node_name}.outputs.data[0].username",
+                            "desc": "用户名（从查询结果中获取）"
+                        }
+                    else:
+                        # 通用的ID和名称字段示例
+                        example_inputs["entityId"] = {
+                            "type": "string",
+                            "value": f"$.{node_name}.outputs.data[0].id",
+                            "desc": "实体ID（从查询结果中获取）"
+                        }
+                else:
+                    example_inputs[input_field_name] = {
+                        "type": field_type,
+                        "value": f"$.{node_name}.outputs.{output_field}",
+                        "desc": field_desc
+                    }
+            
+            # 生成JSON示例
+            inputs_json = json.dumps(example_inputs, ensure_ascii=False, indent=2)
+            
+            return f"""**基于真实前置节点 `{node_name}` 的正确示例**:
+
+前置节点的实际outputs结构:
+```json
+{json.dumps(outputs, ensure_ascii=False, indent=2)}
+```
+
+**对应的inputs配置**:
+```json
+"inputs": {inputs_json}
+```
+
+**说明**: 以上示例是基于前置节点 `{node_name}` 的实际outputs字段生成的，请严格按照这种格式引用前置节点的数据。"""
+            
+        except Exception as e:
+            logger.error(f"生成真实inputs示例失败: {str(e)}")
+            return """**通用inputs示例**:
+```json
+"inputs": {{{{
+  "previousResult": {{{{
+    "type": "object",
+    "value": "$.PreviousNode.outputs",
+    "desc": "前置节点的输出结果"
+  }}}}
+}}}}
+```"""
+    
     async def _generate_individual_nodes(self, node_prompts: List[Dict[str, Any]], user_requirement: str) -> List[Dict[str, Any]]:
         """逐个生成节点配置"""
         generated_nodes = []
+        generated_node_configs = []  # 存储已生成节点的完整配置
         
         # 收集所有节点的建议名称，用于引用验证
         all_node_names = []
@@ -684,12 +1056,38 @@ class RequirementAnalyzer(BaseAgent):
         
         for i, prompt_info in enumerate(node_prompts):
             node_type = prompt_info["node_type"]
-            node_prompt = prompt_info["generation_prompt"]
+            node_info = prompt_info["node_info"]
             
-            # 在提示词中添加节点名称上下文
-            enhanced_prompt = self._enhance_prompt_with_node_context(node_prompt, all_node_names, i)
+            # 🎯 动态重新生成包含真实前置节点配置的提示词
+            context = await self.state_manager.get_context()
+            user_requirement = context.user_requirement
+            dsl_template = self.dsl_templates.get(node_type, "")
+            
+            # 使用基础的业务上下文（简化版本）
+            business_context = {
+                "requirement_summary": f"为{node_type}节点生成配置",
+                "key_actions": [node_info.get("purpose", "执行节点功能")],
+                "data_entities": ["数据处理"],
+                "business_rules": ["遵循DSL规范"]
+            }
+            
+            # 使用真实的前置节点配置重新生成提示词
+            updated_prompt = await self._create_node_generation_prompt(
+                node_type=node_type,
+                node_info=node_info,
+                user_requirement=user_requirement,
+                dsl_template=dsl_template,
+                business_context=business_context,
+                previous_node_configs=generated_node_configs  # 🎯 传递真实的前置节点配置
+            )
+            
+            # 在提示词中添加节点名称上下文和前置节点的详细配置
+            enhanced_prompt = self._enhance_prompt_with_node_context(
+                updated_prompt, all_node_names, i, generated_node_configs, node_type
+            )
             
             logger.info(f"生成节点 {i+1}/{len(node_prompts)}: {node_type}")
+            logger.info(f"🎯 使用了 {len(generated_node_configs)} 个前置节点的真实配置")
             
             try:
                 # 调用LLM生成节点配置
@@ -703,12 +1101,12 @@ class RequirementAnalyzer(BaseAgent):
                 node_config = self._parse_node_response(response)
                 
                 # 验证节点配置
-                validated_config = self._validate_node_config(node_config, node_type)
+                # validated_config = self._validate_node_config(node_config, node_type)
                 
                 # 添加到结果中
                 generated_nodes.append({
                     "node_type": node_type,
-                    "node_config": validated_config,
+                    "node_config": node_config,
                     "generation_info": {
                         "prompt_used": enhanced_prompt,
                         "raw_response": response,
@@ -716,7 +1114,14 @@ class RequirementAnalyzer(BaseAgent):
                     }
                 })
                 
-                logger.info(f"成功生成节点: {validated_config.get('name', 'unknown')}")
+                # 保存已生成的节点配置，供后续节点参考
+                generated_node_configs.append({
+                    "name": node_config.get('name', 'unknown'),
+                    "type": node_config.get('type', node_type),
+                    "config": node_config
+                })
+                
+                logger.info(f"成功生成节点: {node_config.get('name', 'unknown')}")
                 
             except Exception as e:
                 logger.error(f"生成节点 {node_type} 失败: {str(e)}")
@@ -730,15 +1135,34 @@ class RequirementAnalyzer(BaseAgent):
                         "is_default": True
                     }
                 })
+                
+                # 也要保存默认配置供后续节点参考
+                generated_node_configs.append({
+                    "name": default_config.get('name', 'unknown'),
+                    "type": default_config.get('type', node_type),
+                    "config": default_config
+                })
         
         return generated_nodes
     
-    def _enhance_prompt_with_node_context(self, base_prompt: str, all_node_names: List[str], current_index: int) -> str:
-        """增强提示词，添加节点名称上下文"""
+    def _enhance_prompt_with_node_context(self, base_prompt: str, all_node_names: List[str], current_index: int, generated_node_configs: List[Dict[str, Any]] = None, current_node_type: str = "") -> str:
+        """增强提示词，添加节点名称上下文、前置节点详细配置和具体的输入参数映射指导"""
         
         # 获取前面已生成的节点名称
         previous_node_names = all_node_names[:current_index]
         remaining_node_names = all_node_names[current_index:]
+        current_node_name = remaining_node_names[0] if remaining_node_names else "CurrentNode"
+        
+        # 生成前置节点的详细配置信息
+        previous_nodes_details = self._generate_previous_nodes_details(generated_node_configs or [])
+        
+        # 🎯 生成基于真实前置节点配置的inputs示例
+        real_inputs_example = self._generate_real_inputs_example(generated_node_configs or [], current_node_type)
+        
+        # 生成具体的输入参数映射指导（基于实际的前置节点配置）
+        input_mapping_guidance = self._generate_enhanced_input_mapping_guidance(
+            previous_node_names, current_node_name, current_index, generated_node_configs or []
+        )
         
         context_info = f"""
 ## 节点名称上下文
@@ -746,21 +1170,40 @@ class RequirementAnalyzer(BaseAgent):
 **已生成的节点名称**:
 {', '.join(previous_node_names) if previous_node_names else '无'}
 
-**当前和后续节点名称**:
-{', '.join(remaining_node_names) if remaining_node_names else '无'}
+**当前节点名称**: {current_node_name}
 
-**数据引用要求**:
-- 只能引用已生成的节点名称: {', '.join(previous_node_names) if previous_node_names else '无'}
-- 必须使用完整的节点名称，不能使用简化或虚构的名称
-- 如果是第一个节点，可以使用 workflowStart 节点作为数据源
-- 引用格式: $.NodeName.outputs.fieldName 或 $.NodeName.inputs.fieldName
+**后续节点名称**:
+{', '.join(remaining_node_names[1:]) if len(remaining_node_names) > 1 else '无'}
+
+## 📋 前置节点详细配置（重要参考）
+
+{previous_nodes_details}
+
+## 🎯 输入参数映射指导（基于实际前置节点）
+
+{input_mapping_guidance}
+
+## 🔧 基于真实前置节点的inputs配置示例
+
+{real_inputs_example}
+
+## 数据引用规范
+
+**引用格式**:
+- 引用前置节点输出: `$.NodeName.{{outputs}}.fieldName`
+- 引用工作流输入: `$.workflowStart.{{inputs}}.fieldName`
+- 数据库查询节点的固定输出: `data` (数组) 和 `affected` (数字)
 
 **特别注意**:
-- 节点名称必须以大写字母开头，采用PascalCase格式，如 "QueryUser", "CreateOrder", "CheckUserExists"
-- 节点名称必须唯一，不能与已生成的节点名称重复
-- 禁止使用不存在的节点名称，如 "StartNode", "ValidateSupplier", "CheckProduct" 等
-- 必须使用建议的节点名称，确保引用的准确性
-- 如果需要引用其他节点的数据，请使用上述 "已生成的节点名称" 中的名称
+- ⚠️ **数据库节点的输出结构是固定的**: 所有dbQuery/dbCreate/dbUpdate/dbDelete节点的{{outputs}}只有两个字段：
+  - `data`: 查询结果数组 (type: "array")
+  - `affected`: 受影响行数 (type: "number")
+- ⚠️ **存在性检查**: 判断查询是否有结果请使用 `$.NodeName.{{outputs}}.affected > 0`
+- ⚠️ **获取具体数据**: 获取查询结果中的字段请使用 `$.NodeName.{{outputs}}.data[0].fieldName`
+- 节点名称必须以大写字母开头，采用PascalCase格式
+- 禁止使用不存在的节点名称
+- 必须使用实际已生成的节点名称进行引用
+- ⚠️ **严格按照上述前置节点的实际outputs字段进行引用，不要虚构字段名称**
 """
         
         # 将上下文信息添加到基础提示词中
@@ -768,22 +1211,332 @@ class RequirementAnalyzer(BaseAgent):
         
         return enhanced_prompt
     
+    def _generate_previous_nodes_details(self, generated_node_configs: List[Dict[str, Any]]) -> str:
+        """生成前置节点的详细配置信息"""
+        try:
+            if not generated_node_configs:
+                return "**当前没有前置节点**，这是第一个节点。"
+            
+            details = "以下是已生成的前置节点的详细配置，当前节点可以引用这些节点的outputs：\n\n"
+            
+            for i, node_info in enumerate(generated_node_configs, 1):
+                node_name = node_info.get('name', 'Unknown')
+                node_type = node_info.get('type', 'unknown')
+                node_config = node_info.get('config', {})
+                
+                # 获取节点的inputs、outputs和configs
+                inputs = node_config.get('inputs', {})
+                outputs = node_config.get('outputs', {})
+                configs = node_config.get('configs', {})
+                
+                details += f"### {i}. 节点: {node_name} (类型: {node_type})\n\n"
+                
+                # 显示outputs结构（最重要，当前节点需要引用）
+                if outputs:
+                    details += "**🎯 可引用的outputs字段** (重要):\n"
+                    details += "```json\n"
+                    details += json.dumps(outputs, ensure_ascii=False, indent=2)
+                    details += "\n```\n\n"
+                    
+                    # 生成具体的引用示例
+                    details += "**引用示例**:\n"
+                    for field_name, field_info in outputs.items():
+                        field_type = field_info.get('type', 'unknown')
+                        details += f"- `$.{node_name}.outputs.{field_name}` - {field_info.get('desc', '无描述')} (类型: {field_type})\n"
+                    details += "\n"
+                else:
+                    details += "**outputs**: 空（该节点不产生输出数据）\n\n"
+                
+                # 显示configs（如果包含SQL或重要配置信息）
+                if configs:
+                    details += "**节点配置信息**:\n"
+                    if 'sql' in configs:
+                        details += f"- SQL语句: `{configs['sql']}`\n"
+                    if 'table' in configs:
+                        details += f"- 操作表: `{configs['table']}`\n"
+                    if 'method' in configs:
+                        details += f"- HTTP方法: `{configs['method']}`\n"
+                    if 'url' in configs:
+                        details += f"- 请求URL: `{configs['url']}`\n"
+                    details += "\n"
+                
+                details += "---\n\n"
+            
+            details += "⚠️ **重要提醒**: 当前节点的inputs必须引用上述前置节点的outputs字段，不能虚构不存在的字段名称！"
+            
+            return details
+            
+        except Exception as e:
+            logger.error(f"生成前置节点详细信息失败: {str(e)}")
+            return "**无法获取前置节点详细信息**，请参考通用的数据引用规范。"
+    
+    def _generate_enhanced_input_mapping_guidance(self, previous_node_names: List[str], current_node_name: str, current_index: int, generated_node_configs: List[Dict[str, Any]]) -> str:
+        """基于实际前置节点配置生成增强的输入映射指导"""
+        try:
+            if current_index == 0 or not generated_node_configs:
+                return """**当前是第一个节点**:
+- 通常是workflowStart节点，不需要引用其他节点的数据
+- inputs用于定义工作流的初始输入参数
+- 例如: `"inputs": {"parameters": {"type": "object", "desc": "工作流输入参数"}}`"""
+            
+            elif len(generated_node_configs) == 1:
+                # 只有一个前置节点的情况
+                prev_node_config = generated_node_configs[0]
+                prev_node_name = prev_node_config.get('name', 'Unknown')
+                prev_node_type = prev_node_config.get('type', 'unknown')
+                prev_outputs = prev_node_config.get('config', {}).get('outputs', {})
+                
+                guidance = f"""**当前节点有一个前置节点: {prev_node_name} (类型: {prev_node_type})**
+
+🎯 **基于实际前置节点的输入参数设置**:
+
+"""
+                
+                if prev_outputs:
+                    guidance += f"前置节点 `{prev_node_name}` 的实际outputs字段:\n\n"
+                    
+                    # 生成具体的inputs配置建议
+                    suggested_inputs = {}
+                    for field_name, field_info in prev_outputs.items():
+                        field_type = field_info.get('type', 'object')
+                        field_desc = field_info.get('desc', f'来自{prev_node_name}的{field_name}数据')
+                        
+                        # 生成合适的input字段名
+                        input_field_name = self._generate_input_field_name(field_name, prev_node_name)
+                        
+                        suggested_inputs[input_field_name] = {
+                            "type": field_type,
+                            "value": f"$.{prev_node_name}.outputs.{field_name}",
+                            "desc": field_desc
+                        }
+                    
+                    guidance += "**推荐的inputs配置**:\n"
+                    guidance += "```json\n"
+                    guidance += '"inputs": ' + json.dumps(suggested_inputs, ensure_ascii=False, indent=2) + "\n"
+                    guidance += "```\n\n"
+                    
+                    guidance += "**字段说明**:\n"
+                    for input_name, input_config in suggested_inputs.items():
+                        guidance += f"- `{input_name}`: {input_config['desc']} (引用: `{input_config['value']}`)\n"
+                
+                else:
+                    guidance += f"⚠️ 前置节点 `{prev_node_name}` 没有outputs字段，请根据节点类型设置合适的inputs。\n"
+                
+                return guidance
+            
+            else:
+                # 多个前置节点的情况
+                most_recent_config = generated_node_configs[-1]
+                most_recent_name = most_recent_config.get('name', 'Unknown')
+                most_recent_outputs = most_recent_config.get('config', {}).get('outputs', {})
+                
+                guidance = f"""**当前节点有多个前置节点，最近的是: {most_recent_name}**
+
+🎯 **建议主要引用最近的前置节点**:
+
+"""
+                
+                if most_recent_outputs:
+                    # 生成基于最近节点的inputs建议
+                    suggested_inputs = {}
+                    for field_name, field_info in most_recent_outputs.items():
+                        field_type = field_info.get('type', 'object')
+                        field_desc = field_info.get('desc', f'来自{most_recent_name}的{field_name}数据')
+                        
+                        input_field_name = self._generate_input_field_name(field_name, most_recent_name)
+                        suggested_inputs[input_field_name] = {
+                            "type": field_type,
+                            "value": f"$.{most_recent_name}.outputs.{field_name}",
+                            "desc": field_desc
+                        }
+                    
+                    guidance += "**基于最近前置节点的推荐inputs配置**:\n"
+                    guidance += "```json\n"
+                    guidance += '"inputs": ' + json.dumps(suggested_inputs, ensure_ascii=False, indent=2) + "\n"
+                    guidance += "```\n\n"
+                
+                # 列出所有可引用的前置节点
+                guidance += "**所有可引用的前置节点**:\n"
+                for config in generated_node_configs:
+                    node_name = config.get('name', 'Unknown')
+                    outputs = config.get('config', {}).get('outputs', {})
+                    if outputs:
+                        guidance += f"- `{node_name}`: 可引用字段 {list(outputs.keys())}\n"
+                
+                return guidance
+        
+        except Exception as e:
+            logger.error(f"生成增强输入映射指导失败: {str(e)}")
+            return f"""**基本输入映射指导**:
+- 当前节点需要设置{{inputs}}字段来引用前置节点的数据
+- 使用格式: `"value": "$.NodeName.{{outputs}}.fieldName"`
+- 可引用的前置节点: {', '.join(previous_node_names) if previous_node_names else '无'}"""
+    
+    def _generate_input_field_name(self, output_field_name: str, source_node_name: str) -> str:
+        """为输入字段生成合适的名称"""
+        # 根据输出字段名生成合适的输入字段名
+        field_mappings = {
+            'data': 'queryResult',
+            'affected': 'affectedRows',
+            'code': 'statusCode',
+            'response': 'llmResponse',
+            'result': 'previousResult'
+        }
+        
+        # 如果有预定义的映射，使用它
+        if output_field_name in field_mappings:
+            return field_mappings[output_field_name]
+        
+        # 否则，使用源节点名称+字段名
+        if 'Query' in source_node_name and output_field_name == 'data':
+            return 'queryResult'
+        elif 'Http' in source_node_name and output_field_name == 'data':
+            return 'httpResponse'
+        else:
+            # 通用情况
+            return f"{output_field_name}FromPrevious"
+    
+    def _generate_input_mapping_guidance(self, previous_node_names: List[str], current_node_name: str, current_index: int) -> str:
+        """生成具体的输入参数映射指导"""
+        try:
+            if current_index == 0:
+                # 第一个节点（通常是开始节点）
+                return """**当前是第一个节点**:
+- 通常是workflowStart节点，不需要引用其他节点的数据
+- inputs用于定义工作流的初始输入参数
+- 例如: `"inputs": {"parameters": {"type": "object", "desc": "工作流输入参数"}}`"""
+            
+            elif len(previous_node_names) == 0:
+                return """**没有前置节点**:
+- 当前节点应该是工作流的起始节点
+- inputs用于定义工作流的初始参数"""
+            
+            elif len(previous_node_names) == 1:
+                # 只有一个前置节点的情况
+                prev_node = previous_node_names[0]
+                return f"""**当前节点有一个前置节点: {prev_node}**
+
+🎯 **输入参数设置要求**:
+当前节点需要从前置节点 `{prev_node}` 获取数据，请根据以下规则设置inputs字段：
+
+1. **如果前置节点是数据库查询节点** (dbQuery/dbCreate/dbUpdate/dbDelete):
+   ```json
+   "inputs": {{{{
+     "queryResult": {{{{
+       "type": "array",
+       "value": "$.{prev_node}.outputs.data",
+       "desc": "前置查询的结果数据"
+     }}}},
+     "affectedRows": {{{{
+       "type": "number", 
+       "value": "$.{prev_node}.outputs.affected",
+       "desc": "前置查询影响的行数"
+     }}}}
+   }}}}
+   ```
+
+2. **如果前置节点是HTTP请求节点**:
+   ```json
+   "inputs": {{{{
+     "httpResponse": {{{{
+       "type": "object",
+       "value": "$.{prev_node}.outputs.data",
+       "desc": "HTTP响应数据"
+     }}}},
+     "statusCode": {{{{
+       "type": "number",
+       "value": "$.{prev_node}.outputs.code", 
+       "desc": "HTTP状态码"
+     }}}}
+   }}}}
+   ```
+
+3. **如果前置节点是开始节点** (workflowStart):
+   ```json
+   "inputs": {{{{
+     "workflowParams": {{{{
+       "type": "object",
+       "value": "$.{prev_node}.inputs.parameters",
+       "desc": "工作流输入参数"
+     }}}}
+   }}}}
+   ```
+
+4. **通用情况**:
+   ```json
+   "inputs": {{{{
+     "previousResult": {{{{
+       "type": "object",
+       "value": "$.{prev_node}.outputs",
+       "desc": "前置节点的输出结果"
+     }}}}
+   }}}}
+   ```
+
+⚠️ **关键注意事项**:
+- 必须使用 `"value": "$.{{{{prev_node}}}}.{{outputs}}.fieldName"` 格式进行引用
+- 数据库节点只有 `data` 和 `affected` 两个输出字段
+- 不要虚构不存在的字段名称，严格按照节点类型的标准输出结构"""
+            
+            else:
+                # 多个前置节点的情况
+                prev_nodes_list = ', '.join(previous_node_names)
+                most_recent_node = previous_node_names[-1]
+                
+                return f"""**当前节点有多个前置节点: {prev_nodes_list}**
+
+🎯 **输入参数设置要求**:
+当前节点可以引用多个前置节点的数据，建议主要引用最近的前置节点 `{most_recent_node}`：
+
+**推荐的inputs设置**:
+```json
+"inputs": {{{{
+  "primaryInput": {{{{
+    "type": "object",
+    "value": "$.{most_recent_node}.outputs",
+    "desc": "主要输入数据（来自最近的前置节点）"
+  }}}},
+  "contextData": {{{{
+    "type": "object", 
+    "value": "$.{previous_node_names[0]}.outputs",
+    "desc": "上下文数据（来自早期节点）"
+  }}}}
+}}}}
+```
+
+**如果需要引用特定节点的数据**:
+可以根据业务需求引用任何前置节点：
+- `$.{{{{previous_node_names[0]}}}}.{{outputs}}.xxx` - 引用第一个节点的输出
+- `$.{{{{most_recent_node}}}}.{{outputs}}.xxx` - 引用最近节点的输出
+
+⚠️ **数据库节点特别提醒**:
+如果前置节点包含数据库操作，请使用标准的输出字段：
+- `$.NodeName.{{outputs}}.data` - 查询结果数组
+- `$.NodeName.{{outputs}}.affected` - 受影响行数"""
+        
+        except Exception as e:
+            logger.error(f"生成输入映射指导失败: {str(e)}")
+            return f"""**基本输入映射指导**:
+- 当前节点需要设置{{inputs}}字段来引用前置节点的数据
+- 使用格式: `"value": "$.NodeName.{{outputs}}.fieldName"`
+- 可引用的前置节点: {', '.join(previous_node_names) if previous_node_names else '无'}"""
+    
     def _get_max_tokens_for_node_type(self, node_type: str) -> int:
         """根据节点类型获取最大token数"""
         token_limits = {
-            "transaction": 3000,  # 事务节点需要更多tokens
-            "batch": 2500,        # 批处理节点需要更多tokens
-            "chatWithLLM": 2000,  # LLM节点需要更多tokens
-            "code": 2000,         # 代码节点需要更多tokens
-            "condition": 1500,    # 条件节点
-            "http": 1500,         # HTTP节点
-            "workflow": 1500,     # 工作流节点
-            "dbQuery": 1500,      # 数据库查询节点
-            "dbCreate": 1500,     # 数据库创建节点
-            "dbUpdate": 1500,     # 数据库更新节点
-            "dbDelete": 1500,     # 数据库删除节点
-            "workflowStart": 1000,  # 开始节点
-            "workflowEnd": 1000,    # 结束节点
+            "transaction": 8000,  # 事务节点需要更多tokens
+            "batch": 8000,        # 批处理节点需要更多tokens
+            "chatWithLLM": 8000,  # LLM节点需要更多tokens
+            "code": 80000,         # 代码节点需要更多tokens
+            "condition": 8000,    # 条件节点
+            "http": 8000,         # HTTP节点
+            "workflow": 8000,     # 工作流节点
+            "dbQuery": 8000,      # 数据库查询节点
+            "dbCreate": 8000,     # 数据库创建节点
+            "dbUpdate": 8000,     # 数据库更新节点
+            "dbDelete": 8000,     # 数据库删除节点
+            "workflowStart": 8000,  # 开始节点
+            "workflowEnd": 8000,    # 结束节点
         }
         
         return token_limits.get(node_type, 1500)  # 默认1500 tokens
@@ -875,7 +1628,6 @@ class RequirementAnalyzer(BaseAgent):
                 "name": "CheckCondition",
                 "type": "condition",
                 "desc": "条件判断节点",
-                "inputs": {},
                 "configs": {
                     "conditionGroups": [
                         {
@@ -1072,9 +1824,9 @@ class RequirementAnalyzer(BaseAgent):
         
         for field in required_fields:
             if field not in node_config:
-                # 对于workflowStart和workflowEnd节点的configs/outputs字段，不产生警告
+                # 对于开始和结束节点的configs/outputs字段，不产生警告
                 should_warn = True
-                if expected_type in ["workflowStart", "workflowEnd"]:
+                if node_type_manager.is_start_node(expected_type) or node_type_manager.is_end_node(expected_type):
                     if field in ["configs", "outputs"]:
                         should_warn = False
                 
@@ -1085,8 +1837,8 @@ class RequirementAnalyzer(BaseAgent):
                     node_config[field] = {}
                 elif field == "outputs":
                     # 根据节点类型设置默认outputs
-                    if expected_type == "workflowStart":
-                        node_config[field] = {}  # workflowStart不产生输出数据
+                    if node_type_manager.is_start_node(expected_type):
+                        node_config[field] = {}  # 开始节点不产生输出数据
                     else:
                         node_config[field] = {}  # 其他节点设置为空，由系统自动生成
                 elif field == "configs":
@@ -1114,18 +1866,19 @@ class RequirementAnalyzer(BaseAgent):
                 logger.info(f"移除condition节点的nextNodes字段，因为condition节点的流向由条件配置决定")
                 del node_config["nextNodes"]
                 
-        # 特殊处理：确保workflowEnd节点的nextNodes正确
-        if expected_type == "workflowEnd":
+        # 特殊处理：确保结束节点的nextNodes正确
+        if node_type_manager.is_end_node(expected_type):
+            actual_end_type = node_type_manager.find_end_node_type() or expected_type
             if node_config.get("nextNodes") != ["end"]:
-                logger.info(f"修正workflowEnd节点的nextNodes为['end']")
+                logger.info(f"修正{actual_end_type}节点的nextNodes为['end']")
                 node_config["nextNodes"] = ["end"]
                 
-            # 确保workflowEnd节点有必需的输出字段
+            # 确保结束节点有必需的输出字段
             required_outputs = ["code", "data", "message"]
             outputs = node_config.get("outputs", {})
             for output_field in required_outputs:
                 if output_field not in outputs:
-                    logger.warning(f"workflowEnd节点缺少必需输出字段: {output_field}，添加默认配置")
+                    logger.warning(f"{actual_end_type}节点缺少必需输出字段: {output_field}，添加默认配置")
                     if output_field == "code":
                         outputs[output_field] = {
                             "type": "number",
@@ -1148,190 +1901,129 @@ class RequirementAnalyzer(BaseAgent):
         
         return node_config
     
-    def _create_fallback_node(self, node_type: str, node_info: Dict[str, Any]) -> Dict[str, Any]:
-        """创建后备节点配置"""
-        fallback_node = {
-            "name": node_info.get("suggested_name", f"Default{node_type.title()}"),
-            "type": node_type,
-            "desc": node_info.get("purpose", f"默认{node_type}节点"),
-            "inputs": {},
-            "outputs": {},
-            "configs": {},
-            "nextNodes": []
-        } 
-        
-        # 根据节点类型设置特定的默认配置
-        if node_type == "workflowEnd":
-            fallback_node["nextNodes"] = ["end"]
-            fallback_node["outputs"] = {
-                "code": {
-                    "type": "number",
-                    "value": "200",
-                    "desc": "HTTP状态码"
-                },
-                "data": {
-                    "type": "string",
-                    "value": "操作成功",
-                    "desc": "响应数据"
-                },
-                "message": {
-                    "type": "string",
-                    "value": "操作完成",
-                    "desc": "响应消息"
+    async def _create_fallback_node(self, node_type: str, node_info: Dict[str, Any]) -> Dict[str, Any]:
+        """创建后备节点配置 - 使用数据库DSL数据"""
+        try:
+            # 从共享上下文获取节点DSL数据
+            context = await self.state_manager.get_context()
+            node_dsl_data = getattr(context, 'node_dsl_data', {})
+            
+            # 基础节点结构
+            fallback_node = {
+                "name": node_info.get("suggested_name", f"Default{node_type.title()}"),
+                "type": node_type,
+                "desc": node_info.get("purpose", f"默认{node_type}节点"),
+                "inputs": {},
+                "outputs": {},
+                "configs": {},
+                "nextNodes": []
+            }
+            
+            # 如果数据库中有该节点类型的DSL数据，使用它作为模板
+            if node_type in node_dsl_data:
+                dsl_data = node_dsl_data[node_type]
+                example = dsl_data.get('example', {})
+                
+                # 使用数据库中的示例作为基础
+                if example and isinstance(example, dict):
+                    # 保留基础信息，使用示例的结构
+                    for field in ["inputs", "outputs", "configs", "nextNodes"]:
+                        if field in example:
+                            fallback_node[field] = example[field]
+                    
+                    # 使用我们的建议名称覆盖示例名称
+                    fallback_node["name"] = node_info.get("suggested_name", example.get("name", f"Default{node_type.title()}"))
+                    fallback_node["desc"] = node_info.get("purpose", example.get("desc", f"默认{node_type}节点"))
+                    
+                    logger.info(f"使用数据库DSL示例创建 {node_type} 后备节点")
+                    return fallback_node
+            
+            # 如果没有数据库DSL数据，使用节点类型管理器的通用逻辑
+            if node_type_manager.is_start_node(node_type):
+                # 开始节点的默认配置
+                fallback_node["inputs"] = {"parameters": {"type": "object", "desc": "工作流输入参数"}}
+                fallback_node["outputs"] = {}
+                fallback_node["configs"] = {}
+                
+            elif node_type_manager.is_end_node(node_type):
+                # 结束节点的默认配置
+                fallback_node["nextNodes"] = ["end"]
+                fallback_node["outputs"] = {
+                    "code": {"type": "number", "value": "200", "desc": "HTTP状态码"},
+                    "data": {"type": "string", "value": "操作成功", "desc": "响应数据"},
+                    "message": {"type": "string", "value": "操作完成", "desc": "响应消息"}
                 }
-            }
-        elif node_type == "dbQuery":
-            fallback_node["outputs"] = {
-                "affected": {
-                    "type": "number",
-                    "desc": "查询返回的行数"
-                },
-                "data": {
-                    "type": "array",
-                    "desc": "查询结果数据"
+                fallback_node["configs"] = {}
+                
+            elif "db" in node_type.lower():
+                # 数据库节点的通用配置
+                fallback_node["outputs"] = {
+                    "affected": {"type": "number", "desc": "影响的行数"}
                 }
-            }
-            fallback_node["configs"] = {
-                "table": "default_table",
-                "sql": "SELECT * FROM default_table"
-            }
-        elif node_type == "dbCreate":
-            fallback_node["outputs"] = {
-                "affected": {
-                    "type": "number",
-                    "desc": "影响的行数"
-                },
-                "insertId": {
-                    "type": "string",
-                    "desc": "新插入记录的ID"
+                fallback_node["configs"] = {
+                    "table": "default_table",
+                    "sql": "SELECT 1"
                 }
-            }
-            fallback_node["configs"] = {
-                "table": "default_table",
-                "sql": "INSERT INTO default_table (field) VALUES (value)"
-            }
-        elif node_type == "dbUpdate":
-            fallback_node["outputs"] = {
-                "affected": {
-                    "type": "number",
-                    "desc": "影响的行数"
+                
+                # 根据操作类型调整
+                if "query" in node_type.lower() or "select" in node_type.lower():
+                    fallback_node["outputs"]["data"] = {"type": "array", "desc": "查询结果数据"}
+                elif "create" in node_type.lower() or "insert" in node_type.lower():
+                    fallback_node["outputs"]["insertId"] = {"type": "string", "desc": "新插入记录的ID"}
+                    
+            elif "http" in node_type.lower():
+                # HTTP节点的默认配置
+                fallback_node["outputs"] = {
+                    "code": {"type": "number", "desc": "HTTP状态码"},
+                    "data": {"type": "object", "desc": "响应数据"}
                 }
-            }
-            fallback_node["configs"] = {
-                "table": "default_table",
-                "sql": "UPDATE default_table SET field = value WHERE condition"
-            }
-        elif node_type == "dbDelete":
-            fallback_node["outputs"] = {
-                "affected": {
-                    "type": "number",
-                    "desc": "影响的行数"
+                fallback_node["configs"] = {
+                    "method": "GET",
+                    "url": "https://api.example.com",
+                    "bodyType": "none"
                 }
-            }
-            fallback_node["configs"] = {
-                "table": "default_table",
-                "sql": "DELETE FROM default_table WHERE condition"
-            }
-        elif node_type == "http":
-            fallback_node["outputs"] = {
-                "code": {
-                    "type": "number",
-                    "desc": "HTTP状态码"
-                },
-                "data": {
-                    "type": "object",
-                    "desc": "响应数据"
+                
+            elif "condition" in node_type.lower():
+                # 条件节点的特殊处理
+                fallback_node["outputs"] = {}  # 条件节点不产生输出
+                fallback_node["nextNodes"] = []  # 条件节点不使用nextNodes
+                fallback_node["configs"] = {
+                    "conditionGroups": [],
+                    "defaultNextNode": ""
                 }
-            }
-            fallback_node["configs"] = {
-                "method": "GET",
-                "url": "https://api.example.com",
-                "bodyType": "none"
-            }
-        elif node_type == "chatWithLLM":
-            fallback_node["outputs"] = {
-                "thinking": {
-                    "type": "string",
-                    "desc": "AI思考过程"
-                },
-                "response": {
-                    "type": "string",
-                    "desc": "AI生成的回复"
-                },
-                "tokens": {
-                    "type": "object",
-                    "desc": "Token使用情况"
+                
+            elif "llm" in node_type.lower() or "chat" in node_type.lower():
+                # LLM节点的默认配置
+                fallback_node["outputs"] = {
+                    "response": {"type": "string", "desc": "AI生成的回复"},
+                    "tokens": {"type": "object", "desc": "Token使用情况"}
                 }
-            }
-            fallback_node["configs"] = {
-                "modelId": "gpt-3.5-turbo"
-            }
-        elif node_type == "condition":
-            # condition节点不需要outputs和nextNodes字段
-            if "outputs" in fallback_node:
-                del fallback_node["outputs"]
-            if "nextNodes" in fallback_node:
-                del fallback_node["nextNodes"]
-            fallback_node["configs"] = {
-                "conditionGroups": [],
-                "defaultNextNode": ""
-            }
-        elif node_type == "batch":
-            fallback_node["outputs"] = {
-                "totalProcessed": {
-                    "type": "number",
-                    "desc": "处理的总数量"
-                },
-                "successCount": {
-                    "type": "number",
-                    "desc": "成功处理的数量"
-                },
-                "failureCount": {
-                    "type": "number",
-                    "desc": "失败处理的数量"
-                },
-                "aggregatedResult": {
-                    "type": "object",
-                    "desc": "聚合结果"
-                },
-                "executionTime": {
-                    "type": "number",
-                    "desc": "执行耗时"
+                fallback_node["configs"] = {
+                    "modelId": "gpt-3.5-turbo"
                 }
-            }
-            fallback_node["configs"] = {
-                "mapConfig": {
-                    "dataSource": "$.BatchNode.inputs.dataList"
-                },
-                "reduceConfig": {
-                    "strategy": "collect"
-                },
-                "child": {}
-            }
-        elif node_type == "transaction":
-            fallback_node["outputs"] = {
-                "committed": {
-                    "type": "boolean",
-                    "desc": "事务是否成功提交"
-                },
-                "affectedTotal": {
-                    "type": "number",
-                    "desc": "影响的总行数"
-                },
-                "childResults": {
-                    "type": "array",
-                    "desc": "子节点执行结果"
-                },
-                "executionTime": {
-                    "type": "number",
-                    "desc": "执行耗时"
+                
+            else:
+                # 通用节点的默认配置
+                fallback_node["outputs"] = {
+                    "result": {"type": "object", "desc": "节点执行结果"}
                 }
-            }
-            fallback_node["configs"] = {
-                "children": []
-            }
-        
-        return fallback_node 
+                fallback_node["configs"] = {}
+            
+            logger.info(f"使用通用逻辑创建 {node_type} 后备节点")
+            return fallback_node
+            
+        except Exception as e:
+            logger.error(f"创建后备节点失败: {str(e)}")
+            # 如果所有方法都失败，返回最基本的节点结构
+            return {
+                "name": node_info.get("suggested_name", f"Default{node_type.title()}"),
+                "type": node_type,
+                "desc": node_info.get("purpose", f"默认{node_type}节点"),
+                "inputs": {},
+                "outputs": {"result": {"type": "object", "desc": "节点执行结果"}},
+                "configs": {},
+                "nextNodes": []
+            } 
 
     async def _ensure_db_templates_loaded(self):
         """确保数据库模板已加载（首次调用时异步加载）"""

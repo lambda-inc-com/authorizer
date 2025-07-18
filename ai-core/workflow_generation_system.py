@@ -38,7 +38,7 @@ class LLMClient:
 
     def _get_provider_priority(self) -> List[str]:
         """获取供应商优先级顺序"""
-        return ["claude", "openai", "xai", "deepseek"]
+        return ["xai","claude", "openai", "deepseek"]
 
     def _load_provider_config(self, provider_name: str) -> Optional[Dict[str, Any]]:
         """加载指定供应商的配置文件"""
@@ -825,7 +825,7 @@ class WorkflowGenerationSystem(MultiAgentOrchestrator):
 
         logger.info("智能体设置完成")
 
-    async def generate_workflow_from_requirement(self, user_requirement: str) -> Dict[str, Any]:
+    async def generate_workflow_from_requirement(self, user_requirement: str, db_info: str = "") -> Dict[str, Any]:
         """从用户需求生成工作流 - 改进版本，支持错误重试"""
         max_retries = 3
         retry_count = 0
@@ -880,7 +880,7 @@ class WorkflowGenerationSystem(MultiAgentOrchestrator):
                     logger.info(f"ℹ️  {model_test.get('note')}")
 
                 # 调用父类的生成方法
-                result = await self.generate_workflow(user_requirement)
+                result = await self.generate_workflow(user_requirement, db_info)
 
                 if result["success"]:
                     logger.info("工作流生成成功")
@@ -1062,4 +1062,4 @@ async def test_workflow_generation():
 
 if __name__ == "__main__":
     # 运行测试
-    asyncio.run(test_workflow_generation()) 
+    asyncio.run(test_workflow_generation())

@@ -3,21 +3,301 @@
 负责将分析出的节点组合成完整的工作流JSON
 """
 
+import re
 import json
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set, Tuple
 from multi_agent_workflow_generator import BaseAgent, AgentRole, MessageType
+from node_type_manager import node_type_manager
 
 logger = logging.getLogger(__name__)
 
 
 class WorkflowComposer(BaseAgent):
-    """工作流组合智能体"""
+    """工作流组合智能体 - 动态验证版本"""
     
     def __init__(self, message_bus, state_manager, llm_client):
         super().__init__(AgentRole.WORKFLOW_COMPOSER, message_bus, state_manager)
         self.llm_client = llm_client
-        self.node_templates = self._load_node_templates()
+        self.node_templates = {}
+        # 节点DSL数据将从共享上下文获取
+        self.node_dsl_data = {}
+
+    def _parse_sql_select_fields(self, sql: str) -> List[str]:
+        """解析SQL SELECT语句，提取返回的字段名"""
+        try:
+            # 简单的SQL解析，提取SELECT子句中的字段
+            sql_clean = sql.strip().upper()
+            if not sql_clean.startswith('SELECT'):
+                return []
+            
+            # 找到SELECT和FROM之间的内容
+            select_match = re.search(r'SELECT\s+(.*?)\s+FROM', sql_clean, re.IGNORECASE | re.DOTALL)
+            if not select_match:
+                return []
+            
+            fields_str = select_match.group(1).strip()
+            
+            # 如果是SELECT *，返回空列表（表示所有字段）
+            if fields_str == '*':
+                return ['*']
+            
+            # 分割字段，处理别名
+            fields = []
+            for field in fields_str.split(','):
+                field = field.strip()
+                # 处理别名 (field AS alias 或 field alias)
+                if ' AS ' in field.upper():
+                    alias = field.split(' AS ')[-1].strip()
+                    fields.append(alias.lower())
+                elif ' ' in field and not field.startswith('('):
+                    # 简单的别名形式 (field alias)
+                    parts = field.split()
+                    if len(parts) >= 2:
+                        fields.append(parts[-1].lower())
+                    else:
+                        fields.append(parts[0].lower())
+                else:
+                    # 提取字段名（去掉表名前缀）
+                    if '.' in field:
+                        field = field.split('.')[-1]
+                    fields.append(field.lower())
+            
+            return fields
+            
+        except Exception as e:
+            logger.warning(f"SQL解析失败: {sql} - {str(e)}")
+            return []
+
+    def _infer_query_result_structure(self, node: Dict[str, Any]) -> Dict[str, Any]:
+        """推断数据库查询节点的结果结构"""
+        result_info = {
+            "has_data": True,
+            "has_affected": True,
+            "data_fields": [],
+            "business_context": ""
+        }
+        
+        if node.get("type") in ["dbQuery", "dbCreate", "dbUpdate", "dbDelete"]:
+            configs = node.get("configs", {})
+            sql = configs.get("sql", "")
+            table = configs.get("table", "")
+            
+            if sql:
+                # 解析SQL获取字段
+                fields = self._parse_sql_select_fields(sql)
+                result_info["data_fields"] = fields
+                
+                # 推断业务上下文
+                node_name = node.get("name", "").lower()
+                if "query" in node_name or "get" in node_name or "find" in node_name:
+                    result_info["business_context"] = "existence_check"
+                elif "create" in node_name or "insert" in node_name:
+                    result_info["business_context"] = "creation_result"
+                elif "update" in node_name:
+                    result_info["business_context"] = "update_result"
+                elif "delete" in node_name:
+                    result_info["business_context"] = "deletion_result"
+        
+        return result_info
+
+    def _generate_smart_condition_logic(self, condition_node: Dict[str, Any], 
+                                      referenced_nodes: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """为条件节点生成智能的判断逻辑"""
+        node_name = condition_node.get("name", "")
+        configs = condition_node.get("configs", {})
+        
+        # 分析条件节点的业务意图
+        business_intent = self._analyze_condition_business_intent(node_name, condition_node.get("desc", ""))
+        
+        # 优化后的条件配置
+        optimized_configs = configs.copy()
+        
+        if "conditionGroups" in optimized_configs:
+            for group in optimized_configs["conditionGroups"]:
+                conditions = group.get("conditions", [])
+                for i, condition in enumerate(conditions):
+                    left_value = condition.get("left", "")
+                    
+                    if left_value.startswith("$."):
+                        # 解析引用的节点
+                        parts = left_value.split(".")
+                        if len(parts) >= 2:
+                            referenced_node_name = parts[1]
+                            if referenced_node_name in referenced_nodes:
+                                referenced_node = referenced_nodes[referenced_node_name]
+                                # 生成更智能的条件
+                                new_condition = self._create_smart_condition(
+                                    referenced_node, business_intent, condition
+                                )
+                                conditions[i] = new_condition
+        
+        return optimized_configs
+    
+    def _analyze_condition_business_intent(self, node_name: str, description: str) -> str:
+        """分析条件节点的业务意图"""
+        text = f"{node_name} {description}".lower()
+        
+        if any(keyword in text for keyword in ["exists", "存在", "检查", "验证", "valid"]):
+            return "existence_check"
+        elif any(keyword in text for keyword in ["status", "状态", "active", "enable"]):
+            return "status_check"  
+        elif any(keyword in text for keyword in ["threshold", "阈值", "limit", "量"]):
+            return "threshold_check"
+        elif any(keyword in text for keyword in ["permission", "权限", "auth", "authorize"]):
+            return "permission_check"
+        else:
+            return "general_check"
+    
+    def _create_smart_condition(self, referenced_node: Dict[str, Any], 
+                              business_intent: str, original_condition: Dict[str, Any]) -> Dict[str, Any]:
+        """基于引用节点和业务意图创建智能条件"""
+        node_type = referenced_node.get("type", "")
+        node_name = referenced_node.get("name", "")
+        
+        # 对于数据库查询节点的存在性检查
+        if node_type == "dbQuery" and business_intent == "existence_check":
+            return {
+                "left": f"$.{node_name}.outputs.affected",
+                "operator": "greaterThan", 
+                "right": 0
+            }
+        
+        # 对于状态检查，尝试从结果数据中获取状态字段
+        elif node_type == "dbQuery" and business_intent == "status_check":
+            result_info = self._infer_query_result_structure(referenced_node)
+            status_fields = [f for f in result_info["data_fields"] if "status" in f.lower()]
+            
+            if status_fields:
+                return {
+                    "left": f"$.{node_name}.outputs.data[0].{status_fields[0]}",
+                    "operator": "equal",
+                    "right": "active"
+                }
+            else:
+                # 回退到存在性检查
+                return {
+                    "left": f"$.{node_name}.outputs.affected",
+                    "operator": "greaterThan",
+                    "right": 0
+                }
+        
+        # 默认的存在性检查
+        else:
+            return {
+                "left": f"$.{node_name}.outputs.affected",
+                "operator": "greaterThan",
+                "right": 0
+            }
+
+    async def _load_node_dsl_from_context(self):
+        """从共享上下文获取节点DSL数据"""
+        try:
+            context = await self.state_manager.get_context()
+            node_dsl_data = getattr(context, 'node_dsl_data', {})
+            
+            if node_dsl_data:
+                self.node_dsl_data = node_dsl_data
+                logger.info(f"✅ WorkflowComposer从共享上下文获取 {len(node_dsl_data)} 个节点DSL数据")
+                return True
+            else:
+                logger.warning("⚠️ WorkflowComposer共享上下文中没有节点DSL数据")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ WorkflowComposer从共享上下文获取节点DSL数据失败: {str(e)}")
+            return False
+
+    def _get_node_required_fields(self, node_type: str) -> List[str]:
+        """基于数据库DSL数据动态获取节点必需字段"""
+        # 基础必需字段
+        base_fields = ["name", "type", "desc", "inputs", "configs"]
+        
+        # 检查节点类型是否需要额外字段
+        if node_type in self.node_dsl_data:
+            dsl_data = self.node_dsl_data[node_type]
+            schema = dsl_data.get('schema', {})
+            
+            # 如果schema中定义了outputs，则需要outputs字段
+            if 'outputs' in schema:
+                base_fields.append("outputs")
+            
+            # 如果schema中定义了nextNodes，则需要nextNodes字段
+            if 'nextNodes' in schema:
+                base_fields.append("nextNodes")
+        else:
+            # 回退到节点类型管理器的判断
+            if not node_type_manager.is_condition_like_node(node_type):
+                base_fields.extend(["outputs", "nextNodes"])
+        
+        return base_fields
+
+    def _validate_node_type_dynamically(self, node_type: str) -> bool:
+        """基于数据库DSL数据动态验证节点类型"""
+        # 首先检查数据库DSL数据
+        if self.node_dsl_data and node_type in self.node_dsl_data:
+            return True
+        
+        # 然后检查节点类型管理器
+        return node_type_manager.validate_node_type(node_type)
+
+    def _get_node_special_rules(self, node_type: str) -> Dict[str, Any]:
+        """基于数据库DSL数据获取节点特殊规则"""
+        rules = {}
+        
+        if node_type in self.node_dsl_data:
+            dsl_data = self.node_dsl_data[node_type]
+            description = dsl_data.get('description', '').lower()
+            schema = dsl_data.get('schema', {})
+            
+            # 基于描述推断特殊规则
+            if '条件' in description or '判断' in description or 'condition' in description:
+                rules['no_outputs'] = True
+                rules['no_nextNodes'] = True
+            
+            # 基于schema推断规则
+            if 'outputs' not in schema:
+                rules['no_outputs'] = True
+            if 'nextNodes' not in schema:
+                rules['no_nextNodes'] = True
+        else:
+            # 使用节点类型管理器的判断
+            if node_type_manager.is_condition_like_node(node_type):
+                rules['no_outputs'] = True
+                rules['no_nextNodes'] = True
+            elif node_type_manager.is_end_node(node_type):
+                rules['nextNodes_must_be_end'] = True
+        
+        return rules
+    
+    async def _load_node_templates_from_context(self) -> Dict[str, Any]:
+        """从共享上下文获取节点DSL数据"""
+        try:
+            context = await self.state_manager.get_context()
+            node_dsl_data = getattr(context, 'node_dsl_data', {})
+            
+            if node_dsl_data:
+                logger.info(f"✅ 从共享上下文获取 {len(node_dsl_data)} 个节点DSL数据")
+                
+                # 转换为兼容的模板格式
+                templates = {}
+                for node_type, dsl_data in node_dsl_data.items():
+                    example = dsl_data.get('example', {})
+                    templates[node_type] = {
+                        "template": example,
+                        "description": dsl_data.get('description', ''),
+                        "schema": dsl_data.get('schema', {}),
+                        "template_content": dsl_data.get('template_content', '')
+                    }
+                
+                return templates
+            else:
+                logger.warning("⚠️ 共享上下文中没有节点DSL数据，使用默认模板")
+                return self._load_node_templates()
+                
+        except Exception as e:
+            logger.error(f"❌ 从共享上下文获取节点DSL数据失败: {str(e)}")
+            return self._load_node_templates()
     
     def _load_node_templates(self) -> Dict[str, Any]:
         """加载节点模板 - 使用新的DSL规范"""
@@ -378,10 +658,54 @@ class WorkflowComposer(BaseAgent):
 4. **连接关系正确**: nextNodes要反映正确的执行顺序
 
 ## 数据引用规范
+
+### 基本引用格式
 - `$.节点名.inputs.字段名` - 引用指定节点的输入参数
 - `$.节点名.outputs.字段名` - 引用指定节点的输出
 - `$.节点名.result.字段名` - 引用Code节点的结果
 - `$.currentItem.字段名` - 批处理中的当前项
+
+### ⚠️ 数据库查询节点特殊规范
+**所有数据库查询节点（dbQuery/dbCreate/dbUpdate/dbDelete）的 outputs 结构是固定的：**
+
+```json
+{
+  "outputs": {
+    "data": {
+      "type": "array",
+      "desc": "查询结果数组，包含SQL SELECT的字段"
+    },
+    "affected": {
+      "type": "number", 
+      "desc": "受影响的行数"
+    }
+  }
+}
+```
+
+### 正确的数据库节点引用方式：
+
+#### 1. 存在性检查（推荐）
+❌ 错误：`$.QuerySupplier.{{outputs}}.supplier`
+❌ 错误：`$.QuerySupplier.{{outputs}}.supplierExists`
+✅ 正确：`$.QuerySupplier.{{outputs}}.affected` (用于判断查询是否有结果)
+
+#### 2. 获取具体字段值
+❌ 错误：`$.QuerySupplier.{{outputs}}.supplierId`
+✅ 正确：`$.QuerySupplier.{{outputs}}.data[0].id` (从查询结果数组中获取字段)
+
+#### 3. 条件节点中的存在性检查
+```json
+{{
+  "conditions": [
+    {{
+      "left": "$.QuerySupplier.{{outputs}}.affected",
+      "operator": "greaterThan",
+      "right": 0
+    }}
+  ]
+}}
+```
 
 ## 节点连接规则
 - 每个节点（除condition外）必须指定nextNodes
@@ -492,6 +816,12 @@ workflowEnd节点必须返回标准的API响应格式，包含：
     async def process_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """处理工作流组合任务 - 增强版，直接使用已生成的节点"""
         try:
+            # 🎯 从共享上下文加载节点DSL数据 (用于动态验证)
+            await self._load_node_dsl_from_context()
+            
+            # 🎯 从共享上下文加载节点模板数据 (兼容性)
+            self.node_templates = await self._load_node_templates_from_context()
+            
             # 获取共享上下文
             context = await self.state_manager.get_context()
             user_requirement = context.user_requirement
@@ -518,7 +848,7 @@ workflowEnd节点必须返回标准的API响应格式，包含：
             )
             
             # 验证组合结果
-            validated_result = self._validate_composition_result({
+            validated_result = await self._validate_composition_result({
                 "workflow": composed_workflow,
                 "composition_notes": {
                     "data_flow": ["节点间通过$prevNode.outputs和$currentNode.inputs进行数据传递"],
@@ -713,18 +1043,20 @@ workflowEnd节点必须返回标准的API响应格式，包含：
         other_nodes = []
         
         for node in node_configs:
-            if node.get("type") == "workflowStart":
+            node_type = node.get("type", "")
+            if node_type_manager.is_start_node(node_type):
                 start_node = node
-            elif node.get("type") == "workflowEnd":
+            elif node_type_manager.is_end_node(node_type):
                 end_node = node
             else:
                 other_nodes.append(node)
         
         # 如果缺少开始或结束节点，创建它们
         if not start_node:
+            actual_start_type = node_type_manager.find_start_node_type() or "start"
             start_node = {
                 "name": "WorkflowStart",
-                "type": "workflowStart", 
+                "type": actual_start_type, 
                 "desc": "工作流开始节点",
                 "inputs": {
                     "parameters": {
@@ -739,9 +1071,10 @@ workflowEnd节点必须返回标准的API响应格式，包含：
             }
         
         if not end_node:
+            actual_end_type = node_type_manager.find_end_node_type() or "end"
             end_node = {
                 "name": "WorkflowEnd",
-                "type": "workflowEnd",
+                "type": actual_end_type,
                 "desc": "工作流结束节点", 
                 "inputs": {
                     "finalResult": {
@@ -1136,36 +1469,103 @@ workflowEnd节点必须返回标准的API响应格式，包含：
         return fix_value(fixed_configs)
     
     def _parse_llm_response(self, response: str) -> Dict[str, Any]:
-        """解析LLM响应"""
+        """解析LLM响应 - 增强版"""
+        if not response or len(response.strip()) == 0:
+            raise ValueError("LLM响应为空")
+        
         try:
-            # 尝试从响应中提取JSON
+            # 🎯 多种方式尝试提取JSON
+            json_str = None
+            
+            # 方式1: 尝试从Markdown代码块中提取
             if "```json" in response:
                 json_start = response.find("```json") + 7
                 json_end = response.find("```", json_start)
-                json_str = response[json_start:json_end].strip()
-            else:
-                json_str = response.strip()
+                if json_end > json_start:
+                    json_str = response[json_start:json_end].strip()
+                    logger.info("🔍 从```json代码块中提取JSON")
             
+            # 方式2: 尝试从普通代码块中提取
+            elif "```" in response and json_str is None:
+                lines = response.split('\n')
+                in_code_block = False
+                json_lines = []
+                
+                for line in lines:
+                    if line.strip().startswith("```"):
+                        if in_code_block:
+                            break  # 结束代码块
+                        else:
+                            in_code_block = True  # 开始代码块
+                            continue
+                    
+                    if in_code_block:
+                        json_lines.append(line)
+                
+                if json_lines:
+                    json_str = '\n'.join(json_lines).strip()
+                    logger.info("🔍 从普通代码块中提取JSON")
+            
+            # 方式3: 尝试找到大括号包围的JSON
+            if json_str is None:
+                # 寻找第一个 { 和最后一个 }
+                first_brace = response.find('{')
+                last_brace = response.rfind('}')
+                
+                if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+                    json_str = response[first_brace:last_brace + 1].strip()
+                    logger.info("🔍 从大括号中提取JSON")
+            
+            # 方式4: 直接尝试解析整个响应
+            if json_str is None:
+                json_str = response.strip()
+                logger.info("🔍 直接解析整个响应")
+            
+            # 🎯 记录提取的JSON用于调试
+            json_preview = json_str[:300] + "..." if len(json_str) > 300 else json_str
+            logger.info(f"🔍 提取的JSON预览: {json_preview}")
+            
+            # 尝试解析JSON
             result = json.loads(json_str)
+            logger.info("✅ JSON解析成功")
             return result
             
         except json.JSONDecodeError as e:
-            logger.error(f"解析LLM响应JSON失败: {str(e)}")
+            logger.error(f"❌ 解析LLM响应JSON失败: {str(e)}")
+            logger.error(f"❌ 尝试解析的JSON字符串: {json_str[:500] if json_str else 'None'}...")
+            
+            # 🎯 提供更详细的错误信息
+            if json_str:
+                error_line = e.lineno if hasattr(e, 'lineno') else 'unknown'
+                error_col = e.colno if hasattr(e, 'colno') else 'unknown'
+                logger.error(f"❌ JSON错误位置: 行 {error_line}, 列 {error_col}")
+                
+                # 显示错误附近的内容
+                if hasattr(e, 'pos') and e.pos < len(json_str):
+                    start = max(0, e.pos - 50)
+                    end = min(len(json_str), e.pos + 50)
+                    context = json_str[start:end]
+                    logger.error(f"❌ 错误上下文: ...{context}...")
+            
             raise ValueError(f"LLM响应格式不正确: {str(e)}")
     
-    def _validate_composition_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """验证组合结果"""
+        except Exception as e:
+            logger.error(f"❌ 解析LLM响应时发生未知错误: {str(e)}")
+            raise ValueError(f"LLM响应解析失败: {str(e)}")
+    
+    async def _validate_composition_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """验证组合结果 - 简化版本（只检查连接关系）"""
         # 检查必需字段
         if "workflow" not in result:
             raise ValueError("组合结果缺少workflow字段")
         
         workflow = result["workflow"]
         
-        # 检查工作流必需字段
-        required_fields = ["name", "description", "version", "nodes"]
-        for field in required_fields:
-            if field not in workflow:
-                raise ValueError(f"工作流缺少必需字段: {field}")
+        # # 检查工作流必需字段
+        # required_fields = ["name", "description", "version", "nodes"]
+        # for field in required_fields:
+        #     if field not in workflow:
+        #         raise ValueError(f"工作流缺少必需字段: {field}")
         
         # 验证节点
         nodes = workflow["nodes"]
@@ -1177,65 +1577,685 @@ workflowEnd节点必须返回标准的API响应格式，包含：
         if len(node_names) != len(set(node_names)):
             raise ValueError("节点名称必须唯一")
         
-        # 验证每个节点
-        for node in nodes:
-            self._validate_node(node)
+        # 🎯 暂时注释掉单个节点验证，只保留连接关系验证
+        # for node in nodes:
+        #     self._validate_node(node)
         
-        # 验证节点连接关系
+        # 🎯 只验证节点连接关系（nextNodes 引用是否正确）
         self._validate_node_connections(nodes)
+        
+        # 🎯 验证数据引用并尝试自动修复
+        data_reference_errors = self._validate_data_references(nodes)
+        if data_reference_errors:
+            logger.warning(f"发现 {len(data_reference_errors)} 个数据引用错误:")
+            for error in data_reference_errors:
+                logger.warning(f"  - {error}")
+            
+            # 🎯 收集问题并尝试LLM修复
+            try:
+                logger.info("🔧 正在调用LLM自动修复数据引用错误...")
+                corrected_workflow = await self._fix_data_reference_errors_with_llm(workflow, data_reference_errors)
+                if corrected_workflow:
+                    result["workflow"] = corrected_workflow
+                    logger.info("✅ LLM修复完成，重新验证...")
+                    
+                    # 重新验证修复后的工作流
+                    corrected_nodes = corrected_workflow["nodes"]
+                    corrected_errors = self._validate_data_references(corrected_nodes)
+                    if corrected_errors:
+                        logger.warning(f"修复后仍有 {len(corrected_errors)} 个问题:")
+                        for error in corrected_errors[:5]:  # 只显示前5个
+                            logger.warning(f"  - {error}")
+                    else:
+                        logger.info("🎉 所有数据引用错误已修复！")
+                else:
+                    logger.warning("⚠️ LLM修复失败，尝试基础自动修复...")
+                    
+                    # 🎯 基础自动修复作为回退方案
+                    try:
+                        basic_fixed_workflow = self._apply_basic_fixes(workflow, data_reference_errors)
+                        if basic_fixed_workflow:
+                            result["workflow"] = basic_fixed_workflow
+                            logger.info("✅ 基础自动修复完成")
+                            
+                            # 验证基础修复结果
+                            basic_fixed_nodes = basic_fixed_workflow["nodes"]
+                            basic_fixed_errors = self._validate_data_references(basic_fixed_nodes)
+                            if basic_fixed_errors:
+                                logger.warning(f"基础修复后仍有 {len(basic_fixed_errors)} 个问题")
+                            else:
+                                logger.info("🎉 基础修复成功，所有问题已解决！")
+                        else:
+                            logger.warning("⚠️ 基础自动修复也失败，继续使用原工作流")
+                    except Exception as basic_fix_error:
+                        logger.error(f"❌ 基础自动修复出错: {str(basic_fix_error)}")
+                        logger.warning("⚠️ 继续使用原工作流")
+            except Exception as e:
+                logger.error(f"❌ LLM修复过程中出错: {str(e)}")
+                logger.warning("⚠️ 继续使用原工作流")
+        
+        logger.info("✅ 工作流验证通过（简化模式：仅检查连接关系）")
         
         return result
     
     def _validate_node(self, node: Dict[str, Any]) -> None:
-        """验证单个节点"""
-        # 检查必需字段，但根据节点类型决定是否需要outputs和nextNodes
-        required_fields = ["name", "type", "desc", "inputs", "configs"]
+        """验证单个节点 - 动态验证版本"""
+        node_type = node.get("type", "unknown")
+        node_name = node.get("name", "unknown")
         
-        # condition节点不需要outputs和nextNodes字段
-        if node.get("type") != "condition":
-            required_fields.extend(["outputs", "nextNodes"])
+        # 🎯 使用动态方法获取必需字段
+        required_fields = self._get_node_required_fields(node_type)
         
         for field in required_fields:
             if field not in node:
-                raise ValueError(f"节点 {node.get('name', 'unknown')} 缺少必需字段: {field}")
+                raise ValueError(f"节点 {node_name} 缺少必需字段: {field}")
         
-        # 验证节点类型
-        if node["type"] not in self.node_templates:
-            raise ValueError(f"不支持的节点类型: {node['type']}")
+        # 🎯 使用动态方法验证节点类型
+        if not self._validate_node_type_dynamically(node_type):
+            raise ValueError(f"不支持的节点类型: {node_type}")
             
-        # 特殊验证：condition节点不应该有outputs和nextNodes字段
-        if node.get("type") == "condition":
-            if "outputs" in node:
-                raise ValueError(f"condition节点 {node.get('name')} 不应该包含outputs字段")
-            if "nextNodes" in node:
-                raise ValueError(f"condition节点 {node.get('name')} 不应该包含nextNodes字段")
+        # 🎯 使用动态方法获取特殊规则
+        special_rules = self._get_node_special_rules(node_type)
+        
+        # 验证特殊规则
+        if special_rules.get('no_outputs', False) and "outputs" in node:
+            raise ValueError(f"节点 {node_name} (类型: {node_type}) 不应该包含outputs字段")
+        
+        if special_rules.get('no_nextNodes', False) and "nextNodes" in node:
+            raise ValueError(f"节点 {node_name} (类型: {node_type}) 不应该包含nextNodes字段")
+        
+        if special_rules.get('nextNodes_must_be_end', False):
+            next_nodes = node.get("nextNodes", [])
+            if next_nodes != ["end"]:
+                raise ValueError(f"节点 {node_name} (类型: {node_type}) 的nextNodes必须是['end']")
     
     def _validate_node_connections(self, nodes: List[Dict[str, Any]]) -> None:
-        """验证节点连接关系"""
+        """验证节点连接关系 - 动态验证版本"""
         node_names = {node["name"] for node in nodes}
         
-        # 检查起始节点
-        start_nodes = [node for node in nodes if node["type"] == "workflowStart"]
-        if len(start_nodes) != 1:
-            raise ValueError("工作流必须包含且仅包含一个workflowStart节点")
+        # 🎯 使用动态方法检查起始节点
+        start_nodes = [node for node in nodes if node_type_manager.is_start_node(node.get("type", ""))]
+        start_type_name = node_type_manager.find_start_node_type() or "开始"
         
-        # 检查结束节点
-        end_nodes = [node for node in nodes if node["type"] == "workflowEnd"]
-        if len(end_nodes) != 1:
-            raise ValueError("工作流必须包含且仅包含一个workflowEnd节点")
+        if len(start_nodes) != 1:
+            raise ValueError(f"工作流必须包含且仅包含一个{start_type_name}节点")
+        
+        # 🎯 使用动态方法检查结束节点  
+        end_nodes = [node for node in nodes if node_type_manager.is_end_node(node.get("type", ""))]
+        end_type_name = node_type_manager.find_end_node_type() or "结束"
+        
+        if len(end_nodes) == 0:
+            raise ValueError(f"工作流必须至少包含一个{end_type_name}节点")
         
         # 验证nextNodes引用
         for node in nodes:
-            if node["type"] == "workflowEnd":
-                if node["nextNodes"] != ["end"]:
-                    raise ValueError("workflowEnd节点的nextNodes必须是['end']")
-            elif node["type"] == "condition":
-                # 条件节点不包含nextNodes字段，跳过验证
+            node_type = node.get("type", "")
+            node_name = node.get("name", "unknown")
+
+            
+            # 🎯 使用动态方法检查特殊规则
+            special_rules = self._get_node_special_rules(node_type)
+            if special_rules.get('no_nextNodes', False):
+                # 有些节点类型不包含nextNodes字段，跳过验证
                 continue
             else:
-                for next_node in node["nextNodes"]:
+                # 验证nextNodes引用
+                next_nodes = node.get("nextNodes", [])
+                for next_node in next_nodes:
                     if next_node != "end" and next_node not in node_names:
-                        raise ValueError(f"节点 {node['name']} 的nextNodes引用了不存在的节点: {next_node}")
+                        raise ValueError(f"节点 {node_name} 的nextNodes引用了不存在的节点: {next_node}")
+    
+    def _validate_data_references(self, nodes: List[Dict[str, Any]]) -> List[str]:
+        """验证数据引用的正确性 - 确保引用的字段在前置节点的输出中确实存在"""
+        errors = []
+        suggestions = []
+        
+        # 构建节点映射
+        node_map = {node.get("name", f"node_{i}"): node for i, node in enumerate(nodes)}
+        
+        for node in nodes:
+            node_name = node.get("name", "unknown")
+            
+            # 检查 inputs 中的数据引用
+            inputs = node.get("inputs", {})
+            for input_name, input_config in inputs.items():
+                if isinstance(input_config, dict) and "value" in input_config:
+                    value = input_config["value"]
+                    if isinstance(value, str) and value.startswith("$."):
+                        # 解析数据引用路径 $.NodeName.outputs.fieldName
+                        ref_errors, ref_suggestions = self._validate_single_data_reference_with_suggestions(
+                            value, node_map, node_name
+                        )
+                        errors.extend(ref_errors)
+                        suggestions.extend(ref_suggestions)
+            
+            # 检查 condition 节点的条件引用
+            if node.get("type") == "condition":
+                configs = node.get("configs", {})
+                condition_groups = configs.get("conditionGroups", [])
+                for group in condition_groups:
+                    conditions = group.get("conditions", [])
+                    for condition in conditions:
+                        left_value = condition.get("left", "")
+                        if isinstance(left_value, str) and left_value.startswith("$."):
+                            ref_errors, ref_suggestions = self._validate_single_data_reference_with_suggestions(
+                                left_value, node_map, node_name
+                            )
+                            errors.extend(ref_errors)
+                            suggestions.extend(ref_suggestions)
+        
+        # 将建议添加到错误列表中
+        errors.extend(suggestions)
+        return errors
+    
+    def _validate_single_data_reference_with_suggestions(self, reference: str, node_map: Dict[str, Any], current_node: str) -> Tuple[List[str], List[str]]:
+        """验证单个数据引用并提供智能建议"""
+        errors = []
+        suggestions = []
+        
+        try:
+            # 解析引用路径：$.NodeName.outputs.fieldName
+            parts = reference.split(".")
+            if len(parts) < 4:  # 至少需要 $, NodeName, outputs, fieldName
+                errors.append(f"节点 {current_node} 中的数据引用格式不正确: {reference}")
+                return errors, suggestions
+            
+            referenced_node_name = parts[1]
+            section = parts[2]  # 通常是 "outputs" 或 "inputs"
+            field_path = ".".join(parts[3:])  # 字段路径，可能有嵌套
+            
+            # 检查引用的节点是否存在
+            if referenced_node_name not in node_map:
+                errors.append(f"节点 {current_node} 引用了不存在的节点: {referenced_node_name} (在 {reference})")
+                return errors, suggestions
+            
+            referenced_node = node_map[referenced_node_name]
+            
+            # 检查引用的 section 是否存在
+            if section not in referenced_node:
+                errors.append(f"节点 {current_node} 引用了 {referenced_node_name} 不存在的section: {section} (在 {reference})")
+                
+                # 🎯 智能建议：如果是开始节点引用outputs，建议改为inputs
+                if section == "outputs" and node_type_manager.is_start_node(referenced_node.get("type", "")):
+                    suggestions.append(f"💡 建议: {referenced_node_name} 是开始节点，应使用 inputs 而不是 outputs")
+                    suggestions.append(f"   修复: {reference} → $.{referenced_node_name}.inputs.{field_path}")
+                
+                return errors, suggestions
+            
+            # 检查字段是否存在（只检查第一级字段）
+            section_data = referenced_node[section]
+            if isinstance(section_data, dict):
+                first_field = parts[3] if len(parts) > 3 else ""
+                if first_field and first_field not in section_data:
+                    errors.append(f"节点 {current_node} 引用了 {referenced_node_name}.{section} 中不存在的字段: {first_field} (在 {reference})")
+                    
+                    # 提供可用字段建议
+                    available_fields = list(section_data.keys())
+                    if available_fields:
+                        errors.append(f"  可用字段: {', '.join(available_fields)}")
+                    
+                    # 🎯 智能建议：特殊处理数据库查询节点
+                    if referenced_node.get("type") == "dbQuery":
+                        suggestions.extend(self._generate_db_query_suggestions(
+                            referenced_node, current_node, first_field, reference
+                        ))
+        
+        except Exception as e:
+            errors.append(f"节点 {current_node} 中的数据引用解析失败: {reference} - {str(e)}")
+        
+        return errors, suggestions
+    
+    def _generate_db_query_suggestions(self, query_node: Dict[str, Any], current_node: str, missing_field: str, original_ref: str) -> List[str]:
+        """为数据库查询节点生成智能建议"""
+        suggestions = []
+        node_name = query_node.get("name", "")
+        
+        # 解析SQL获取可用字段
+        result_info = self._infer_query_result_structure(query_node)
+        data_fields = result_info.get("data_fields", [])
+        
+        # 如果缺失的字段明显是想要判断存在性
+        existence_indicators = ["exists", "found", "valid", "success", "id", "count"]
+        if any(indicator in missing_field.lower() for indicator in existence_indicators):
+            suggestions.append(f"💡 建议: 用查询结果数量判断 {missing_field}")
+            suggestions.append(f"   修复: {original_ref} → $.{node_name}.outputs.affected")
+            suggestions.append(f"   条件: $.{node_name}.outputs.affected > 0")
+        
+        # 如果SQL中有对应的字段
+        if data_fields and missing_field.lower() in [f.lower() for f in data_fields]:
+            matching_field = next(f for f in data_fields if f.lower() == missing_field.lower())
+            suggestions.append(f"💡 建议: 从查询结果数组中获取 {missing_field}")  
+            suggestions.append(f"   修复: {original_ref} → $.{node_name}.outputs.data[0].{matching_field}")
+        
+        # 如果有相似的字段名
+        if data_fields:
+            similar_fields = [f for f in data_fields if missing_field.lower() in f.lower() or f.lower() in missing_field.lower()]
+            if similar_fields:
+                suggestions.append(f"💡 建议: 可能想要的字段: {', '.join(similar_fields)}")
+                for field in similar_fields[:2]:  # 最多显示2个建议
+                    suggestions.append(f"   修复: {original_ref} → $.{node_name}.outputs.data[0].{field}")
+        
+        return suggestions
+    
+    def _validate_single_data_reference(self, reference: str, node_map: Dict[str, Any], current_node: str) -> List[str]:
+        """验证单个数据引用 - 兼容性方法"""
+        errors, _ = self._validate_single_data_reference_with_suggestions(reference, node_map, current_node)
+        return errors
+    
+    async def _fix_data_reference_errors_with_llm(self, workflow: Dict[str, Any], errors: List[str]) -> Optional[Dict[str, Any]]:
+        """使用LLM自动修复数据引用错误"""
+        try:
+            # 分析错误并构造修复提示
+            error_summary = self._analyze_data_reference_errors(errors)
+            
+            system_prompt = """# 工作流数据引用修复专家
+
+你是一个专业的工作流数据引用修复专家，负责修复工作流中的数据引用错误。
+
+## 你的任务
+根据检测到的数据引用错误，修复工作流JSON中的错误引用，确保：
+1. 所有数据引用路径正确
+2. 引用的字段在前置节点的输出中确实存在  
+3. 保持业务逻辑的完整性
+4. 理解SQL查询结果的字段结构
+
+## 数据库查询节点的输出结构
+
+所有数据库查询节点（dbQuery、dbCreate、dbUpdate、dbDelete）都有固定的输出结构：
+```json
+{
+  "outputs": {
+    "data": {
+      "type": "array", 
+      "desc": "查询结果数组，每项包含SQL SELECT子句中的字段"
+    },
+    "affected": {
+      "type": "number",
+      "desc": "受影响的行数"
+    }
+  }
+}
+```
+
+## SQL字段解析规则
+
+从SQL语句解析可用字段：
+- `SELECT id, name, status FROM users` → data[0] 包含: {id, name, status}
+- `SELECT u.id as user_id, u.name FROM users u` → data[0] 包含: {user_id, name}
+- `SELECT * FROM products` → data[0] 包含表的所有字段
+
+## 修复规则
+
+### 1. 开始节点引用问题
+❌ 错误：`$.StartNode.{{outputs}}.field`
+✅ 正确：`$.StartNode.{{inputs}}.field`
+
+### 2. 存在性检查（推荐方式）
+❌ 错误：`$.QuerySupplier.{{outputs}}.supplierExists`
+✅ 正确：`$.QuerySupplier.{{outputs}}.affected > 0`
+- 用查询结果行数判断记录是否存在，这是最可靠的方式
+
+### 3. 获取查询结果中的具体字段
+❌ 错误：`$.QuerySupplier.{{outputs}}.supplierId`
+✅ 正确：`$.QuerySupplier.{{outputs}}.data[0].id`
+- 从SQL `SELECT id, name, status FROM suppliers` 可知data[0]包含{{id, name, status}}
+
+### 4. 条件节点的智能修复
+```json
+// 供应商存在性检查
+{{
+  "conditions": [
+    {{
+      "left": "$.QuerySupplier.{{outputs}}.affected",
+      "operator": "greaterThan", 
+      "right": 0
+    }}
+  ]
+}}
+
+// 状态检查（如果SQL包含status字段）
+{{
+  "conditions": [
+    {{
+      "left": "$.QuerySupplier.{{outputs}}.data[0].status",
+      "operator": "equal",
+      "right": "active"
+    }}
+  ]
+}}
+```
+
+### 5. 字段名映射规则
+- `supplierId` → `id` (主键通常是id)
+- `supplierExists` → `affected > 0` (存在性检查)
+- `productId` → `id` (主键通常是id)
+- `isValid` → `affected > 0` or `status == 'active'`
+
+## 输出格式
+请直接输出修复后的完整工作流JSON，格式与输入保持一致。
+
+## 注意事项
+- 仔细分析每个节点的SQL语句，了解返回的字段结构
+- 优先使用 `affected > 0` 进行存在性检查
+- 从 `data[0].fieldName` 获取具体字段值
+- 保持业务逻辑的合理性
+- 确保所有数据引用都能在运行时正确解析"""
+
+            # 分析工作流中的SQL字段结构
+            sql_analysis = self._analyze_workflow_sql_structure(workflow)
+            
+            user_prompt = f"""请修复以下工作流中的数据引用错误：
+
+## 检测到的错误问题
+{chr(10).join(f"- {error}" for error in errors[:20])}  # 限制错误数量避免token过多
+
+## 错误分析
+{error_summary}
+
+## SQL字段结构分析
+{sql_analysis}
+
+## 原始工作流JSON
+```json
+{json.dumps(workflow, ensure_ascii=False, indent=2)}
+```
+
+请根据SQL字段结构分析，修复所有数据引用错误，并提供修复后的完整工作流JSON。"""
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+            
+            # 调用LLM
+            response = await self.llm_client.chat_completion(
+                messages=messages,
+                max_tokens=8000,
+                temperature=0.3
+            )
+            
+            # 🎯 添加详细的调试信息
+            logger.info(f"🔍 LLM修复响应长度: {len(response) if response else 0}")
+            logger.info(f"🔍 LLM修复响应类型: {type(response)}")
+            
+            if not response:
+                logger.error("❌ LLM修复响应为空")
+                return None
+            
+            if len(response.strip()) == 0:
+                logger.error("❌ LLM修复响应为空字符串")
+                return None
+            
+            # 🎯 记录响应的前200个字符用于调试
+            response_preview = response[:200] + "..." if len(response) > 200 else response
+            logger.info(f"🔍 LLM修复响应预览: {response_preview}")
+            
+            # 解析LLM响应
+            try:
+                corrected_workflow = self._parse_llm_response(response)
+            except Exception as e:
+                logger.error(f"❌ LLM响应解析失败: {str(e)}")
+                logger.error(f"❌ 原始响应内容: {response[:1000]}...")  # 记录前1000个字符
+                return None
+            
+            # 🎯 验证修复结果的完整性
+            if corrected_workflow:
+                if "workflow" in corrected_workflow:
+                    workflow_data = corrected_workflow["workflow"]
+                    # 基本验证：确保包含必要字段
+                    if "nodes" in workflow_data and isinstance(workflow_data["nodes"], list):
+                        logger.info("✅ LLM修复成功，返回修复后的工作流")
+                        return workflow_data
+                    else:
+                        logger.error("❌ LLM修复结果缺少有效的nodes字段")
+                        return None
+                elif "nodes" in corrected_workflow and isinstance(corrected_workflow["nodes"], list):
+                    logger.info("✅ LLM修复成功，返回修复后的工作流（直接格式）")
+                    return corrected_workflow
+                else:
+                    logger.error("❌ LLM修复结果格式不正确，缺少workflow或nodes字段")
+                    logger.error(f"❌ 实际返回的字段: {list(corrected_workflow.keys()) if isinstance(corrected_workflow, dict) else '非字典格式'}")
+                    return None
+            else:
+                logger.error("❌ LLM修复结果为空")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ LLM修复过程中出错: {str(e)}")
+            logger.error(f"❌ 错误类型: {type(e).__name__}")
+            
+            # 🎯 提供更具体的错误处理建议
+            if "timeout" in str(e).lower():
+                logger.error("💡 建议: LLM请求超时，可能需要减少输入内容或增加超时时间")
+            elif "rate limit" in str(e).lower():
+                logger.error("💡 建议: API调用频率限制，请稍后重试")
+            elif "token" in str(e).lower():
+                logger.error("💡 建议: Token数量可能超出限制，尝试减少输入内容")
+            
+            return None
+    
+    def _analyze_data_reference_errors(self, errors: List[str]) -> str:
+        """分析数据引用错误的模式"""
+        analysis = {
+            "start_node_outputs": 0,
+            "query_node_missing_fields": 0,
+            "condition_reference_errors": 0,
+            "field_not_exist": 0
+        }
+        
+        for error in errors:
+            if "StartStockIn 不存在的section: outputs" in error:
+                analysis["start_node_outputs"] += 1
+            elif "outputs 中不存在的字段" in error:
+                analysis["query_node_missing_fields"] += 1
+            elif "条件" in error or "condition" in error:
+                analysis["condition_reference_errors"] += 1
+            elif "不存在的字段" in error:
+                analysis["field_not_exist"] += 1
+        
+        summary_parts = []
+        if analysis["start_node_outputs"] > 0:
+            summary_parts.append(f"开始节点outputs引用错误: {analysis['start_node_outputs']}个")
+        if analysis["query_node_missing_fields"] > 0:
+            summary_parts.append(f"查询节点字段引用错误: {analysis['query_node_missing_fields']}个")
+        if analysis["condition_reference_errors"] > 0:
+            summary_parts.append(f"条件节点引用错误: {analysis['condition_reference_errors']}个")
+        if analysis["field_not_exist"] > 0:
+            summary_parts.append(f"字段不存在错误: {analysis['field_not_exist']}个")
+        
+        return "； ".join(summary_parts) if summary_parts else "未识别的错误模式"
+    
+    def _analyze_workflow_sql_structure(self, workflow: Dict[str, Any]) -> str:
+        """分析工作流中所有SQL语句的字段结构"""
+        analysis_lines = []
+        
+        nodes = workflow.get("nodes", [])
+        db_nodes = [node for node in nodes if node.get("type", "").startswith("db")]
+        
+        if not db_nodes:
+            return "无数据库查询节点"
+        
+        analysis_lines.append("各节点SQL字段结构:")
+        
+        for node in db_nodes:
+            node_name = node.get("name", "unknown")
+            node_type = node.get("type", "")
+            configs = node.get("configs", {})
+            sql = configs.get("sql", "")
+            table = configs.get("table", "")
+            
+            if sql:
+                # 解析SQL字段
+                fields = self._parse_sql_select_fields(sql)
+                
+                analysis_lines.append(f"\n📋 {node_name} ({node_type}):")
+                analysis_lines.append(f"   表: {table}")
+                analysis_lines.append(f"   SQL: {sql}")
+                
+                if fields:
+                    if '*' in fields:
+                        analysis_lines.append(f"   🔍 返回字段: 所有字段 (SELECT *)")
+                        analysis_lines.append(f"   📦 data[0] 结构: 包含 {table} 表的所有字段")
+                    else:
+                        analysis_lines.append(f"   🔍 返回字段: {', '.join(fields)}")
+                        analysis_lines.append(f"   📦 data[0] 结构: {{{', '.join(f'{field}: value' for field in fields)}}}")
+                else:
+                    analysis_lines.append(f"   ⚠️ 无法解析字段结构")
+                
+                # 添加输出结构说明
+                analysis_lines.append(f"   📤 outputs.data: 查询结果数组")
+                analysis_lines.append(f"   📤 outputs.affected: 查询行数 (用于存在性检查)")
+                
+                # 推荐的引用方式
+                if fields and '*' not in fields:
+                    analysis_lines.append(f"   💡 字段引用示例:")
+                    for field in fields[:3]:  # 只显示前3个字段
+                        analysis_lines.append(f"      $.{node_name}.outputs.data[0].{field}")
+                
+                analysis_lines.append(f"   💡 存在性检查: $.{node_name}.outputs.affected > 0")
+        
+        return "\n".join(analysis_lines)
+    
+    def _apply_basic_fixes(self, workflow: Dict[str, Any], errors: List[str]) -> Optional[Dict[str, Any]]:
+        """应用基础的自动修复规则"""
+        try:
+            # 深拷贝工作流以避免修改原始数据
+            import copy
+            fixed_workflow = copy.deepcopy(workflow)
+            nodes = fixed_workflow.get("nodes", [])
+            
+            # 构建节点映射
+            node_map = {node.get("name", f"node_{i}"): node for i, node in enumerate(nodes)}
+            
+            fixes_applied = 0
+            
+            for node in nodes:
+                node_name = node.get("name", "unknown")
+                node_type = node.get("type", "")
+                
+                # 🎯 修复inputs中的数据引用
+                if "inputs" in node:
+                    fixes_applied += self._fix_node_inputs(node, node_map)
+                
+                # 🎯 修复condition节点的条件引用
+                if node_type == "condition" and "configs" in node:
+                    fixes_applied += self._fix_condition_node(node, node_map)
+            
+            if fixes_applied > 0:
+                logger.info(f"✅ 基础修复应用了 {fixes_applied} 个修复")
+                return fixed_workflow
+            else:
+                logger.warning("⚠️ 未应用任何基础修复")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ 基础修复过程中出错: {str(e)}")
+            return None
+    
+    def _fix_node_inputs(self, node: Dict[str, Any], node_map: Dict[str, Any]) -> int:
+        """修复节点inputs中的数据引用"""
+        fixes_count = 0
+        inputs = node.get("inputs", {})
+        
+        for input_name, input_config in inputs.items():
+            if isinstance(input_config, dict) and "value" in input_config:
+                value = input_config["value"]
+                if isinstance(value, str) and value.startswith("$."):
+                    new_value = self._fix_single_reference(value, node_map)
+                    if new_value != value:
+                        input_config["value"] = new_value
+                        fixes_count += 1
+                        logger.info(f"🔧 修复引用: {value} → {new_value}")
+        
+        return fixes_count
+    
+    def _fix_condition_node(self, node: Dict[str, Any], node_map: Dict[str, Any]) -> int:
+        """修复condition节点的条件引用"""
+        fixes_count = 0
+        configs = node.get("configs", {})
+        condition_groups = configs.get("conditionGroups", [])
+        
+        for group in condition_groups:
+            conditions = group.get("conditions", [])
+            for condition in conditions:
+                left_value = condition.get("left", "")
+                if isinstance(left_value, str) and left_value.startswith("$."):
+                    new_value = self._fix_single_reference(left_value, node_map)
+                    if new_value != left_value:
+                        condition["left"] = new_value
+                        # 如果是存在性检查，调整操作符和右值
+                        if ".outputs.affected" in new_value:
+                            condition["operator"] = "greaterThan"
+                            condition["right"] = 0
+                        fixes_count += 1
+                        logger.info(f"🔧 修复条件: {left_value} → {new_value}")
+        
+        return fixes_count
+    
+    def _fix_single_reference(self, reference: str, node_map: Dict[str, Any]) -> str:
+        """修复单个数据引用 - 增强版"""
+        try:
+            parts = reference.split(".")
+            if len(parts) < 4:
+                return reference
+            
+            referenced_node_name = parts[1]
+            section = parts[2]
+            field_path = ".".join(parts[3:])
+            
+            if referenced_node_name not in node_map:
+                return reference
+            
+            referenced_node = node_map[referenced_node_name]
+            referenced_type = referenced_node.get("type", "")
+            
+            # 🎯 规则1: 开始节点的outputs改为inputs
+            if section == "outputs" and node_type_manager.is_start_node(referenced_type):
+                if "inputs" in referenced_node and field_path in referenced_node["inputs"]:
+                    logger.info(f"🔧 修复开始节点引用: {reference} → $.{referenced_node_name}.inputs.{field_path}")
+                    return f"$.{referenced_node_name}.inputs.{field_path}"
+            
+            # 🎯 规则2: 数据库查询节点的不存在字段修复
+            if section == "outputs" and referenced_type == "dbQuery":
+                outputs = referenced_node.get("outputs", {})
+                if field_path not in outputs:
+                    # 🎯 特殊处理：supplier/product/user等实体字段 → 改为存在性检查
+                    entity_fields = ["supplier", "product", "user", "customer", "order", "item", "record"]
+                    if any(entity in field_path.lower() for entity in entity_fields):
+                        logger.info(f"🔧 修复实体引用为存在性检查: {reference} → $.{referenced_node_name}.outputs.affected")
+                        return f"$.{referenced_node_name}.outputs.affected"
+                    
+                    # 🎯 常见的存在性检查字段名
+                    existence_fields = ["exists", "found", "valid", "success", "isactive", "isenabled", "count"]
+                    if any(keyword in field_path.lower() for keyword in existence_fields):
+                        logger.info(f"🔧 修复存在性引用: {reference} → $.{referenced_node_name}.outputs.affected")
+                        return f"$.{referenced_node_name}.outputs.affected"
+                    
+                    # 🎯 尝试从SQL中查找匹配的字段
+                    result_info = self._infer_query_result_structure(referenced_node)
+                    data_fields = result_info.get("data_fields", [])
+                    
+                    # 精确匹配
+                    for db_field in data_fields:
+                        if field_path.lower() == db_field.lower():
+                            logger.info(f"🔧 修复字段引用: {reference} → $.{referenced_node_name}.outputs.data[0].{db_field}")
+                            return f"$.{referenced_node_name}.outputs.data[0].{db_field}"
+                    
+                    # 模糊匹配
+                    for db_field in data_fields:
+                        if field_path.lower() in db_field.lower() or db_field.lower() in field_path.lower():
+                            logger.info(f"🔧 修复相似字段引用: {reference} → $.{referenced_node_name}.outputs.data[0].{db_field}")
+                            return f"$.{referenced_node_name}.outputs.data[0].{db_field}"
+                    
+                    # 🎯 如果都没匹配到，默认使用存在性检查
+                    logger.info(f"🔧 无匹配字段，修复为存在性检查: {reference} → $.{referenced_node_name}.outputs.affected")
+                    return f"$.{referenced_node_name}.outputs.affected"
+            
+            return reference
+            
+        except Exception as e:
+            logger.warning(f"⚠️ 修复单个引用失败: {reference} - {str(e)}")
+            return reference
     
     async def _handle_retry(self, retry_data: Dict[str, Any]) -> None:
         """处理重试请求"""

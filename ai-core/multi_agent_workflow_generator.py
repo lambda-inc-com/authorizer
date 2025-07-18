@@ -55,6 +55,7 @@ class SharedContext:
     """共享上下文"""
     user_requirement: str = ""
     db_info: str = ""  # 添加数据库信息字段
+    node_dsl_data: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # 节点DSL数据
     analyzed_nodes: List[Dict[str, Any]] = field(default_factory=list)
     node_generation_prompts: List[Dict[str, Any]] = field(default_factory=list)
     composed_workflow: Dict[str, Any] = field(default_factory=dict)

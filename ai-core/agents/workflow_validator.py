@@ -7,6 +7,7 @@ import json
 import logging
 from typing import Dict, List, Any, Optional, Set, Tuple
 from multi_agent_workflow_generator import BaseAgent, AgentRole, MessageType
+from node_type_manager import node_type_manager
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,31 @@ class WorkflowValidator(BaseAgent):
         super().__init__(AgentRole.WORKFLOW_VALIDATOR, message_bus, state_manager)
         self.llm_client = llm_client
         self.validation_rules = self._load_validation_rules()
+        # 节点DSL数据将在process_task时从共享上下文获取
+        self.node_dsl_data = {}
     
+    async def _load_node_dsl_from_context(self):
+        """从共享上下文获取节点DSL数据"""
+        try:
+            context = await self.state_manager.get_context()
+            node_dsl_data = getattr(context, 'node_dsl_data', {})
+            
+            if node_dsl_data:
+                self.node_dsl_data = node_dsl_data
+                logger.info(f"✅ WorkflowValidator从共享上下文获取 {len(node_dsl_data)} 个节点DSL数据")
+                
+                # 更新验证规则中的有效节点类型
+                valid_node_types = list(node_dsl_data.keys())
+                if valid_node_types:
+                    self.validation_rules["structure_rules"]["valid_node_types"] = valid_node_types
+                    logger.info(f"📋 更新有效节点类型: {', '.join(valid_node_types)}")
+                    
+            else:
+                logger.warning("⚠️ WorkflowValidator共享上下文中没有节点DSL数据，使用默认验证规则")
+                
+        except Exception as e:
+            logger.error(f"❌ WorkflowValidator从共享上下文获取节点DSL数据失败: {str(e)}")
+
     def _load_validation_rules(self) -> Dict[str, Any]:
         """加载验证规则"""
         return {
@@ -227,6 +252,9 @@ class WorkflowValidator(BaseAgent):
     async def process_task(self, task_data: Dict[str, Any]) -> Dict[str, Any]:
         """处理工作流验证任务"""
         try:
+            # 🎯 从共享上下文加载节点DSL数据
+            await self._load_node_dsl_from_context()
+            
             # 获取共享上下文
             context = await self.state_manager.get_context()
             workflow = context.composed_workflow
@@ -599,15 +627,18 @@ class WorkflowValidator(BaseAgent):
             errors.append(f"节点名称必须唯一，发现重复的节点名称: {', '.join(duplicates)}")
         
         # 检查起始和结束节点
-        start_nodes = [node for node in nodes if node.get("type") == "workflowStart"]
-        end_nodes = [node for node in nodes if node.get("type") == "workflowEnd"]
+        start_nodes = [node for node in nodes if node_type_manager.is_start_node(node.get("type", ""))]
+        end_nodes = [node for node in nodes if node_type_manager.is_end_node(node.get("type", ""))]
         condition_nodes = [node for node in nodes if node.get("type") == "condition"]
         
+        start_type_name = node_type_manager.find_start_node_type() or "开始"
+        end_type_name = node_type_manager.find_end_node_type() or "结束"
+        
         if len(start_nodes) != 1:
-            errors.append("工作流必须包含且仅包含一个workflowStart节点")
+            errors.append(f"工作流必须包含且仅包含一个{start_type_name}节点")
         
         if len(end_nodes) == 0:
-            errors.append("工作流必须至少包含一个workflowEnd节点")
+            errors.append(f"工作流必须至少包含一个{end_type_name}节点")
         elif len(end_nodes) > 1:
             # 如果有多个结束节点，检查是否有条件节点来合理化这种设计
             if len(condition_nodes) == 0:
