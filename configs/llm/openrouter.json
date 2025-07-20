@@ -1,0 +1,28 @@
+{
+  "provider": "OpenRouter",
+  "model_type": "openai",
+  "model_name": "anthropic/claude-3.5-sonnet",
+  "api_key": "${OPENROUTER_API_KEY}",
+  "base_url": "https://openrouter.ai/api/v1",
+  "max_tokens": 8000,
+  "token_ratio": {
+    "input": 1,
+    "output": 1
+  },
+  "is_enabled": true,
+  "extra": {
+    "description": "OpenRouter API 聚合服务配置",
+    "supported_models": [
+      "gpt-4o",
+      "openai/gpt-4o-mini", 
+      "anthropic/claude-3.5-sonnet",
+      "anthropic/claude-3-haiku",
+      "google/gemini-pro",
+      "meta-llama/llama-3.1-70b-instruct",
+      "deepseek/deepseek-chat"
+    ],
+    "documentation": "https://openrouter.ai/docs",
+    "pricing_note": "不同模型价格不同，详见 https://openrouter.ai/models",
+    "api_key_note": "需要在 https://openrouter.ai/keys 获取 API 密钥"
+  }
+} 

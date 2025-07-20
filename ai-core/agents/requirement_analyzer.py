@@ -404,7 +404,7 @@ class RequirementAnalyzer(BaseAgent):
 
 1. **必填字段**: name, type, desc, inputs, outputs, configs, nextNodes
 2. **请参考节点类型的通用规范进行配置**"""
-
+    
     def _get_database_url(self) -> Optional[str]:
         """获取数据库连接URL"""
         try:
@@ -2023,7 +2023,7 @@ class RequirementAnalyzer(BaseAgent):
                 "outputs": {"result": {"type": "object", "desc": "节点执行结果"}},
                 "configs": {},
                 "nextNodes": []
-            } 
+            }
 
     async def _ensure_db_templates_loaded(self):
         """确保数据库模板已加载（首次调用时异步加载）"""

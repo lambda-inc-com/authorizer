@@ -38,7 +38,7 @@ class LLMClient:
 
     def _get_provider_priority(self) -> List[str]:
         """获取供应商优先级顺序"""
-        return ["xai","claude", "openai", "deepseek"]
+        return ["openrouter", "claude", "openai", "deepseek"]
 
     def _load_provider_config(self, provider_name: str) -> Optional[Dict[str, Any]]:
         """加载指定供应商的配置文件"""
@@ -107,8 +107,8 @@ class LLMClient:
                 response = test_client.models.list()
                 return True
 
-            elif provider in ["xai", "deepseek"]:
-                # xAI和DeepSeek都使用OpenAI兼容接口
+            elif provider in ["xai", "deepseek", "openrouter"]:
+                # xAI、DeepSeek和OpenRouter都使用OpenAI兼容接口
                 import openai
                 test_client = openai.OpenAI(api_key=api_key, base_url=base_url)
                 response = test_client.models.list()
@@ -222,8 +222,8 @@ class LLMClient:
                     api_key=config["api_key"],
                     base_url=base_url
                 )
-            elif provider in ["xai", "deepseek"]:
-                # xAI和DeepSeek都使用OpenAI兼容接口
+            elif provider in ["xai", "deepseek", "openrouter"]:
+                # xAI、DeepSeek和OpenRouter都使用OpenAI兼容接口
                 base_url = config.get("base_url")
                 client = openai.OpenAI(
                     api_key=config["api_key"],
@@ -266,8 +266,8 @@ class LLMClient:
             elif provider == "openai":
                 # OpenAI API调用
                 response = await self._call_openai_api(messages, model_name, max_tokens, temperature)
-            elif provider in ["xai", "deepseek"]:
-                # xAI和DeepSeek API调用
+            elif provider in ["xai", "deepseek", "openrouter"]:
+                # xAI、DeepSeek和OpenRouter API调用
                 response = await self._call_openai_api(messages, model_name, max_tokens, temperature)  # 统一调用OpenAI兼容接口
             else:
                 raise ValueError(f"不支持的提供商: {provider}")
@@ -301,8 +301,8 @@ class LLMClient:
                 # OpenAI API流式调用
                 async for chunk in self._stream_openai_api(messages, model_name, max_tokens, temperature):
                     yield chunk
-            elif provider in ["xai", "deepseek"]:
-                # xAI和DeepSeek API流式调用
+            elif provider in ["xai", "deepseek", "openrouter"]:
+                # xAI、DeepSeek和OpenRouter API流式调用
                 async for chunk in self._stream_openai_api(messages, model_name, max_tokens,
                                                            temperature):  # 统一调用OpenAI兼容接口
                     yield chunk
@@ -615,6 +615,20 @@ class LLMClient:
             "deepseek_official": [
                 "deepseek-chat",
                 "deepseek-coder"
+            ],
+            "openrouter_official": [
+                "openai/gpt-4o",
+                "openai/gpt-4o-mini",
+                "openai/gpt-3.5-turbo",
+                "anthropic/claude-3.5-sonnet",
+                "anthropic/claude-3-haiku",
+                "anthropic/claude-3-opus",
+                "google/gemini-pro",
+                "google/gemini-pro-vision",
+                "meta-llama/llama-3.1-70b-instruct",
+                "meta-llama/llama-3.1-405b-instruct",
+                "deepseek/deepseek-chat",
+                "qwen/qwen-2.5-72b-instruct"
             ]
         }
 
@@ -648,6 +662,8 @@ class LLMClient:
             service_type = "xai_official"
         elif provider == "deepseek":
             service_type = "deepseek_official"
+        elif provider == "openrouter":
+            service_type = "openrouter_official"
 
         available_models = self.available_models.get(service_type, [])
 

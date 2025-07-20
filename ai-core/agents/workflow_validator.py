@@ -43,7 +43,7 @@ class WorkflowValidator(BaseAgent):
                 
         except Exception as e:
             logger.error(f"❌ WorkflowValidator从共享上下文获取节点DSL数据失败: {str(e)}")
-
+    
     def _load_validation_rules(self) -> Dict[str, Any]:
         """加载验证规则"""
         return {

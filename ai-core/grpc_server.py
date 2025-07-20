@@ -426,7 +426,7 @@ class AIStreamServiceImpl(ai_service_stream_pb2_grpc.AIStreamServiceServicer):
             try:
                 # 创建一个异步任务来生成工作流
                 generation_task = asyncio.create_task(
-                    self.workflow_system.generate_workflow_from_requirement(requirement, db)
+                    self.workflow_system.generate_workflow_from_requirement(requirement,db)
                 )
                 
                 # 在等待生成完成时，持续发送心跳更新

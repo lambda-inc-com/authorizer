@@ -359,6 +359,17 @@ func (s *Service) createDefaultConfigs(configDir string) error {
 			IsEnabled:  false,
 			Extra:      map[string]string{},
 		},
+		"openrouter.json": {
+			Provider:   "OpenRouter",
+			ModelType:  providers.ModelTypeOpenAI, // OpenRouter 使用 OpenAI 兼容接口
+			ModelName:  "openai/gpt-4o",
+			APIKey:     "${OPENROUTER_API_KEY}",
+			BaseURL:    "https://openrouter.ai/api/v1",
+			MaxTokens:  8000,
+			TokenRatio: map[string]int{"input": 1, "output": 1},
+			IsEnabled:  false,
+			Extra:      map[string]string{},
+		},
 	}
 
 	for filename, config := range defaultConfigs {
